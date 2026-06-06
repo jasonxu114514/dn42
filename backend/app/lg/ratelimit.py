@@ -27,8 +27,6 @@ class SlidingWindowRateLimiter:
             while hits and hits[0] < cutoff:
                 hits.popleft()
             if len(hits) >= self.limit:
-                if not hits:  # never happens here, but keeps the empty-bucket invariant clear
-                    del self._hits[key]
                 return False
             hits.append(now)
             self._prune(cutoff)

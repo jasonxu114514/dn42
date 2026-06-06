@@ -41,3 +41,8 @@ extend-immutable-calls = [
     "fastapi.Header",
     "fastapi.Query",
 ]
+
+[tool.ruff.lint.isort]
+# Pin the local package so import grouping is deterministic regardless of the
+# directory ruff is invoked from (the app package lives under backend/).
+known-first-party = ["app"]

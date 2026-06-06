@@ -1,45 +1,34 @@
-import logging
-import secrets
+"""FastAPI application factory for the dn42 autopeer control plane.
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+Wires the session middleware, static files, and the API + web routers, and runs startup/shutdown
+through the lifespan handler: the insecure-secret guard, schema creation, default seeding, and
+teardown of the pooled looking-glass HTTP client.
+"""
+
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.api.telegram import router as telegram_router
-from app.auth.kioubit import KioubitAuthError, KioubitVerifier
-from app.auth.service import consume_challenge, create_challenge, upsert_user_from_kioubit
-from app.auth.session import current_user, login_user, logout_user
 from app.config import get_settings
 from app.db.init_db import create_schema, seed_defaults
-from app.db.models import Agent, LGQuery, PeerRequest, User
-from app.db.session import SessionLocal, get_db
-from app.lg.client import AgentClient
-from app.lg.ratelimit import SlidingWindowRateLimiter
-from app.lg.validation import validate_query_type, validate_target
-from app.peer.config import render_operator_config, render_user_config
-from app.peer.service import create_peer, delete_peer, deploy_peer_request, update_peer
-from app.peer.validation import asn_link_local_address
+from app.db.session import SessionLocal
+from app.lg.client import aclose_shared_client
+from app.web.admin import router as admin_router
+from app.web.lg import router as lg_router
+from app.web.pages import router as pages_router
+from app.web.portal import router as portal_router
 
 logger = logging.getLogger("dn42.autopeer")
 settings = get_settings()
-templates = Jinja2Templates(directory="app/templates")
-lg_rate_limiter = SlidingWindowRateLimiter(settings.lg_rate_limit, settings.lg_rate_window_seconds)
-app = FastAPI(title=settings.app_name)
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=settings.session_secret,
-    https_only=not settings.allow_insecure_defaults,
-    same_site="lax",
-)
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
-app.include_router(telegram_router)
 
 
-@app.on_event("startup")
-def startup() -> None:
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     insecure = settings.insecure_default_secrets()
     if insecure and not settings.allow_insecure_defaults:
         raise RuntimeError(
@@ -59,453 +48,20 @@ def startup() -> None:
         seed_defaults(db, settings)
     finally:
         db.close()
+    yield
+    await aclose_shared_client()
 
 
-def render(
-    request: Request,
-    name: str,
-    context: dict | None = None,
-    user: User | None = None,
-) -> HTMLResponse:
-    base = {"request": request, "settings": settings, "user": user}
-    if context:
-        base.update(context)
-    return templates.TemplateResponse(request=request, name=name, context=base)
-
-
-@app.get("/", response_class=HTMLResponse)
-def home(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
-    agents = query_enabled_agents(db).all()
-    return render(request, "index.html", {"agents": agents}, user=current_user(request, db))
-
-
-@app.get("/login", response_class=HTMLResponse)
-def login_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
-    challenge = create_challenge(db, purpose="web")
-    return render(
-        request,
-        "login.html",
-        {
-            "return_url": f"{settings.base_url}/auth/kioubit/callback",
-            "token": challenge.token,
-        },
-        user=current_user(request, db),
-    )
-
-
-@app.get("/logout")
-def logout(request: Request) -> RedirectResponse:
-    logout_user(request)
-    return RedirectResponse("/", status_code=303)
-
-
-@app.get("/auth/kioubit/callback")
-def kioubit_callback(
-    request: Request,
-    params: str,
-    signature: str,
-    db: Session = Depends(get_db),
-) -> RedirectResponse:
-    verifier = KioubitVerifier(settings.kioubit_public_key_path, settings.auth_domain)
-    try:
-        data = verifier.verify(params=params, signature=signature)
-        consume_challenge(db, data.get("user_token", ""), purpose="web")
-        user = upsert_user_from_kioubit(db, data, settings)
-    except (KioubitAuthError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    login_user(request, user)
-    return RedirectResponse("/portal", status_code=303)
-
-
-@app.get("/telegram/auth", response_class=HTMLResponse)
-def telegram_auth_page(
-    request: Request,
-    token: str,
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    return render(
-        request,
-        "telegram_auth.html",
-        {
-            "return_url": f"{settings.base_url}/telegram/auth?token={token}",
-            "token": token,
-        },
-        user=current_user(request, db),
-    )
-
-
-@app.get("/portal", response_class=HTMLResponse)
-def portal(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
-    user = current_user(request, db)
-    if user is None:
-        return RedirectResponse("/login", status_code=303)
-    agents = query_enabled_agents(db).all()
-    peers = (
-        db.query(PeerRequest)
-        .filter(PeerRequest.user_id == user.id)
-        .order_by(PeerRequest.created_at.desc())
-        .all()
-    )
-    try:
-        default_peer_link_address = asn_link_local_address(user.primary_asn)
-    except ValueError:
-        default_peer_link_address = ""
-    try:
-        default_local_link_address = asn_link_local_address(settings.local_asn)
-    except ValueError:
-        default_local_link_address = ""
-    return render(
-        request,
-        "portal.html",
-        {
-            "agents": agents,
-            "peers": peers,
-            "default_local_link_address": default_local_link_address,
-            "default_peer_link_address": default_peer_link_address,
-        },
-        user=user,
-    )
-
-
-@app.post("/portal/peers")
-def create_peer_request(
-    request: Request,
-    agent_id: int = Form(...),
-    endpoint: str = Form(...),
-    wg_public_key: str = Form(...),
-    local_link_address: str = Form(...),
-    peer_link_address: str = Form(...),
-    db: Session = Depends(get_db),
-) -> RedirectResponse:
-    user = current_user(request, db)
-    if user is None:
-        return RedirectResponse("/login", status_code=303)
-    agent = query_enabled_agents(db).filter(Agent.id == agent_id).one_or_none()
-    if agent is None:
-        raise HTTPException(status_code=400, detail="Unknown or disabled agent")
-    try:
-        create_peer(
-            db,
-            user=user,
-            agent=agent,
-            endpoint=endpoint,
-            wg_public_key=wg_public_key,
-            local_link_address=local_link_address,
-            peer_link_address=peer_link_address,
-            settings=settings,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    db.commit()
-    return RedirectResponse("/portal", status_code=303)
-
-
-@app.get("/portal/peers/{peer_id}/config", response_class=HTMLResponse)
-def peer_config(peer_id: int, request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
-    user = current_user(request, db)
-    if user is None:
-        return RedirectResponse("/login", status_code=303)
-    peer = db.query(PeerRequest).filter(PeerRequest.id == peer_id).one_or_none()
-    if peer is None or peer.user_id != user.id:
-        raise HTTPException(status_code=404, detail="Peer request not found")
-    return render(
-        request,
-        "config.html",
-        {
-            "title": f"Peer #{peer.id} config",
-            "config": render_user_config(peer, peer.agent, settings.local_asn or "<our-asn>"),
-        },
-        user=user,
-    )
-
-
-@app.get("/admin", response_class=HTMLResponse)
-def admin(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
-    user = current_user(request, db)
-    if user is None or not user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    agents = db.query(Agent).order_by(Agent.name).all()
-    peers = db.query(PeerRequest).order_by(PeerRequest.created_at.desc()).all()
-    return render(request, "admin.html", {"agents": agents, "peers": peers}, user=user)
-
-
-@app.post("/admin/agents")
-def admin_create_agent(
-    request: Request,
-    name: str = Form(...),
-    location: str = Form(""),
-    url: str = Form(...),
-    enabled: str | None = Form(None),
-    db: Session = Depends(get_db),
-) -> RedirectResponse:
-    user = current_user(request, db)
-    if user is None or not user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    name = name.strip()
-    url = url.strip()
-    if not name or not url:
-        raise HTTPException(status_code=400, detail="Agent name and URL are required")
-    if db.query(Agent).filter(Agent.name == name).one_or_none() is not None:
-        raise HTTPException(status_code=400, detail="Agent name already exists")
-    db.add(
-        Agent(
-            name=name,
-            location=location.strip(),
-            url=url,
-            token=secrets.token_urlsafe(32),
-            enabled=enabled == "on",
-        )
-    )
-    db.commit()
-    return RedirectResponse("/admin", status_code=303)
-
-
-@app.post("/admin/agents/{agent_id}/update")
-def admin_update_agent(
-    agent_id: int,
-    request: Request,
-    name: str = Form(...),
-    location: str = Form(""),
-    url: str = Form(...),
-    enabled: str | None = Form(None),
-    db: Session = Depends(get_db),
-) -> RedirectResponse:
-    user = current_user(request, db)
-    if user is None or not user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
-    if agent is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    name = name.strip()
-    url = url.strip()
-    if not name or not url:
-        raise HTTPException(status_code=400, detail="Agent name and URL are required")
-    existing = db.query(Agent).filter(Agent.name == name, Agent.id != agent.id).one_or_none()
-    if existing is not None:
-        raise HTTPException(status_code=400, detail="Agent name already exists")
-    agent.name = name
-    agent.location = location.strip()
-    agent.url = url
-    agent.enabled = enabled == "on"
-    db.commit()
-    return RedirectResponse("/admin", status_code=303)
-
-
-@app.post("/admin/agents/{agent_id}/reset-token")
-def admin_reset_agent_token(
-    agent_id: int,
-    request: Request,
-    db: Session = Depends(get_db),
-) -> RedirectResponse:
-    user = current_user(request, db)
-    if user is None or not user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
-    if agent is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    agent.token = secrets.token_urlsafe(32)
-    db.commit()
-    return RedirectResponse("/admin", status_code=303)
-
-
-@app.post("/admin/agents/{agent_id}/delete")
-def admin_delete_agent(
-    agent_id: int,
-    request: Request,
-    db: Session = Depends(get_db),
-) -> RedirectResponse:
-    user = current_user(request, db)
-    if user is None or not user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
-    if agent is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if db.query(PeerRequest).filter(PeerRequest.agent_id == agent.id).first() is not None:
-        raise HTTPException(
-            status_code=400, detail="Delete or move peers before deleting this agent"
-        )
-    db.delete(agent)
-    db.commit()
-    return RedirectResponse("/admin", status_code=303)
-
-
-@app.post("/admin/peers/{peer_id}/update")
-def admin_update_peer(
-    peer_id: int,
-    request: Request,
-    agent_id: int = Form(...),
-    endpoint: str = Form(...),
-    wg_public_key: str = Form(...),
-    local_link_address: str = Form(...),
-    peer_link_address: str = Form(...),
-    status: str = Form("approved"),
-    db: Session = Depends(get_db),
-) -> RedirectResponse:
-    user = current_user(request, db)
-    if user is None or not user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    peer = db.query(PeerRequest).filter(PeerRequest.id == peer_id).one_or_none()
-    if peer is None:
-        raise HTTPException(status_code=404, detail="Peer not found")
-    agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
-    if agent is None:
-        raise HTTPException(status_code=400, detail="Unknown agent")
-    try:
-        update_peer(
-            db,
-            peer=peer,
-            agent=agent,
-            endpoint=endpoint,
-            wg_public_key=wg_public_key,
-            local_link_address=local_link_address,
-            peer_link_address=peer_link_address,
-            status=status,
-            settings=settings,
-            redeploy=False,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    db.commit()
-    return RedirectResponse("/admin", status_code=303)
-
-
-@app.post("/admin/peers/{peer_id}/redeploy")
-def admin_redeploy_peer(
-    peer_id: int,
-    request: Request,
-    db: Session = Depends(get_db),
-) -> RedirectResponse:
-    user = current_user(request, db)
-    if user is None or not user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    peer = db.query(PeerRequest).filter(PeerRequest.id == peer_id).one_or_none()
-    if peer is None:
-        raise HTTPException(status_code=404, detail="Peer not found")
-    if peer.status != "approved":
-        raise HTTPException(status_code=400, detail="Only approved peers can be deployed")
-    deploy_peer_request(peer, settings)
-    db.commit()
-    return RedirectResponse("/admin", status_code=303)
-
-
-@app.post("/admin/peers/{peer_id}/delete")
-def admin_delete_peer(
-    peer_id: int,
-    request: Request,
-    db: Session = Depends(get_db),
-) -> RedirectResponse:
-    user = current_user(request, db)
-    if user is None or not user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    peer = db.query(PeerRequest).filter(PeerRequest.id == peer_id).one_or_none()
-    if peer is None:
-        raise HTTPException(status_code=404, detail="Peer not found")
-    delete_peer(db, peer=peer)
-    db.commit()
-    return RedirectResponse("/admin", status_code=303)
-
-
-@app.get("/admin/peers/{peer_id}/config", response_class=HTMLResponse)
-def admin_peer_config(
-    peer_id: int, request: Request, db: Session = Depends(get_db)
-) -> HTMLResponse:
-    user = current_user(request, db)
-    if user is None or not user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    peer = db.query(PeerRequest).filter(PeerRequest.id == peer_id).one_or_none()
-    if peer is None:
-        raise HTTPException(status_code=404, detail="Peer not found")
-    return render(
-        request,
-        "config.html",
-        {
-            "title": f"Operator config for peer #{peer.id}",
-            "config": render_operator_config(peer, peer.agent, settings.local_asn or "<our-asn>"),
-        },
-        user=user,
-    )
-
-
-@app.post("/lg", response_class=HTMLResponse)
-async def looking_glass(
-    request: Request,
-    agent_id: int = Form(...),
-    query_type: str = Form(...),
-    target: str = Form(""),
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    if not lg_rate_limiter.allow(client_ip(request)):
-        raise HTTPException(
-            status_code=429,
-            detail="Too many looking glass queries. Please wait a moment and try again.",
-        )
-    agent = query_enabled_agents(db).filter(Agent.id == agent_id).one_or_none()
-    if agent is None:
-        raise HTTPException(status_code=400, detail="Unknown or disabled agent")
-    result_text = ""
-    ok = False
-    normalized_query_type = query_type
-    normalized_target = target.strip()
-    try:
-        normalized_query_type = validate_query_type(query_type)
-        normalized_target = validate_target(normalized_query_type, target)
-    except ValueError as exc:
-        result_text = str(exc)
-    else:
-        try:
-            result = await AgentClient().query(agent, normalized_query_type, normalized_target)
-            ok = bool(result.get("ok", False))
-            result_text = str(result.get("output", result))
-        except ValueError as exc:
-            result_text = str(exc)
-        except Exception as exc:
-            logger.warning(
-                "Looking glass query failed (agent=%s, type=%s): %s",
-                agent.name,
-                normalized_query_type,
-                exc,
-            )
-            result_text = "Query failed: could not reach the looking glass agent."
-    user = current_user(request, db)
-    db.add(
-        LGQuery(
-            user_id=user.id if user else None,
-            agent_id=agent.id,
-            query_type=normalized_query_type,
-            target=normalized_target,
-            ok=ok,
-            result=result_text,
-        )
-    )
-    db.commit()
-    agents = query_enabled_agents(db).all()
-    return render(
-        request,
-        "index.html",
-        {
-            "agents": agents,
-            "lg_result": result_text,
-            "lg_ok": ok,
-            "last_query": normalized_query_type,
-        },
-        user=user,
-    )
-
-
-def query_enabled_agents(db: Session):
-    return db.query(Agent).filter(Agent.enabled.is_(True)).order_by(Agent.name)
-
-
-def client_ip(request: Request) -> str:
-    """Best-effort client identity for rate limiting.
-
-    Uses request.client.host by default. Set FORWARDED_IP_HEADER (e.g. ``X-Forwarded-For``)
-    only when running behind a trusted reverse proxy that sets it, otherwise every request
-    would share one bucket (the proxy IP).
-    """
-    header = settings.forwarded_ip_header.strip()
-    if header:
-        value = request.headers.get(header, "")
-        if value:
-            return value.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.session_secret,
+    https_only=not settings.allow_insecure_defaults,
+    same_site="lax",
+)
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+app.include_router(telegram_router)
+app.include_router(pages_router)
+app.include_router(portal_router)
+app.include_router(admin_router)
+app.include_router(lg_router)

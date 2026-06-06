@@ -24,25 +24,37 @@ WG_KEY_RE = re.compile(r"^[A-Za-z0-9+/]{43}=$")
 
 
 class Backend:
+    """Backend HTTP client. Holds one pooled AsyncClient reused for the bot's lifetime."""
+
     def __init__(self) -> None:
         self.base_url = settings.bot_backend_url.rstrip("/")
         self.headers = {"X-Backend-Secret": settings.telegram_backend_secret}
+        self._client: httpx.AsyncClient | None = None
+
+    def _http(self) -> httpx.AsyncClient:
+        # Created lazily so the client binds to the running event loop, then reused so every
+        # backend call shares one connection pool instead of opening a fresh connection.
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                base_url=self.base_url, headers=self.headers, timeout=30
+            )
+        return self._client
 
     async def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=40) as client:
-            response = await client.post(
-                f"{self.base_url}{path}",
-                json=payload,
-                headers=self.headers,
-            )
+        response = await self._http().post(path, json=payload, timeout=40)
         response.raise_for_status()
         return response.json()
 
     async def get(self, path: str) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.get(f"{self.base_url}{path}", headers=self.headers)
+        response = await self._http().get(path)
         response.raise_for_status()
         return response.json()
+
+    async def aclose(self) -> None:
+        """Close the pooled client on shutdown. Safe to call even if it was never created."""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
 
 backend = Backend()
@@ -182,6 +194,23 @@ async def send_peer_result(message: Message, action: str, result: dict) -> None:
     output = str(result.get("deploy_output", "")).strip()
     if output:
         await message.answer(format_block(output, 1500), parse_mode="Markdown")
+
+
+async def handle_endpoint_step(
+    message: Message, state: FSMContext, *, action: str, next_state: State, prompt: str
+) -> None:
+    """Shared create/edit wizard step: validate a host:port endpoint, store it, advance state."""
+    if await reject_if_command(message, action):
+        return
+    endpoint = (message.text or "").strip()
+    if not looks_like_endpoint(endpoint):
+        await message.answer(
+            "Endpoint must be host:port (e.g. 198.51.100.7:51820). Try again or /cancel."
+        )
+        return
+    await state.update_data(endpoint=endpoint)
+    await state.set_state(next_state)
+    await message.answer(prompt)
 
 
 # --- Help & verification -------------------------------------------------------------------
@@ -451,17 +480,13 @@ async def create_agent_step(message: Message, state: FSMContext) -> None:
 
 @dp.message(CreatePeer.endpoint)
 async def create_endpoint_step(message: Message, state: FSMContext) -> None:
-    if await reject_if_command(message, "create"):
-        return
-    endpoint = (message.text or "").strip()
-    if not looks_like_endpoint(endpoint):
-        await message.answer(
-            "Endpoint must be host:port (e.g. 198.51.100.7:51820). Try again or /cancel."
-        )
-        return
-    await state.update_data(endpoint=endpoint)
-    await state.set_state(CreatePeer.public_key)
-    await message.answer("Your WireGuard public key (44-character base64).")
+    await handle_endpoint_step(
+        message,
+        state,
+        action="create",
+        next_state=CreatePeer.public_key,
+        prompt="Your WireGuard public key (44-character base64).",
+    )
 
 
 @dp.message(CreatePeer.public_key)
@@ -513,17 +538,13 @@ async def edit_choose_step(message: Message, state: FSMContext) -> None:
 
 @dp.message(EditPeer.endpoint)
 async def edit_endpoint_step(message: Message, state: FSMContext) -> None:
-    if await reject_if_command(message, "edit"):
-        return
-    endpoint = (message.text or "").strip()
-    if not looks_like_endpoint(endpoint):
-        await message.answer(
-            "Endpoint must be host:port (e.g. 198.51.100.7:51820). Try again or /cancel."
-        )
-        return
-    await state.update_data(endpoint=endpoint)
-    await state.set_state(EditPeer.public_key)
-    await message.answer("New WireGuard public key (44-character base64).")
+    await handle_endpoint_step(
+        message,
+        state,
+        action="edit",
+        next_state=EditPeer.public_key,
+        prompt="New WireGuard public key (44-character base64).",
+    )
 
 
 @dp.message(EditPeer.public_key)
@@ -602,7 +623,10 @@ async def main() -> None:
     if not settings.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
     bot = Bot(settings.telegram_bot_token)
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await backend.aclose()
 
 
 if __name__ == "__main__":

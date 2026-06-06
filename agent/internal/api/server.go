@@ -54,6 +54,8 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 		if s.Token != "" {
 			want := "Bearer " + s.Token
 			got := r.Header.Get("Authorization")
+			// Constant-time compare so a caller cannot recover the token byte-by-byte
+			// from response timing.
 			if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
 				writeJSON(w, http.StatusUnauthorized, runner.Result{OK: false, Output: "unauthorized"})
 				return
@@ -88,58 +90,68 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.Runner.Status())
 }
 
-func (s *Server) withTarget(fn func(string) runner.Result) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, runner.Result{OK: false, Output: "method not allowed"})
-			return
-		}
-		if contentType := r.Header.Get("Content-Type"); contentType != "" {
-			mediaType, _, err := mime.ParseMediaType(contentType)
-			if err != nil || !strings.EqualFold(mediaType, "application/json") {
-				writeJSON(w, http.StatusUnsupportedMediaType, runner.Result{OK: false, Output: "content type must be application/json"})
-				return
-			}
-		}
-		r.Body = http.MaxBytesReader(w, r.Body, 1024)
-		var req lgRequest
-		decoder := json.NewDecoder(r.Body)
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, runner.Result{OK: false, Output: "invalid json"})
-			return
-		}
-		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-			writeJSON(w, http.StatusBadRequest, runner.Result{OK: false, Output: "invalid json"})
-			return
-		}
-		req.Target = strings.TrimSpace(req.Target)
-		writeJSON(w, http.StatusOK, fn(req.Target))
-	}
-}
-
-func (s *Server) deployPeer(w http.ResponseWriter, r *http.Request) {
+// decodeJSON enforces the shared contract for every POST body endpoint: POST only,
+// Content-Type application/json (when supplied), a bounded body, and exactly one JSON
+// object with no unknown fields and no trailing data. On any violation it writes the
+// error response via fail (so each endpoint keeps its own Result/DeployResult shape and
+// status code) and returns false; the caller just returns. dst must be a non-nil pointer.
+func decodeJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, dst any, fail func(status int, message string)) bool {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, runner.DeployResult{OK: false, Output: "method not allowed"})
-		return
+		fail(http.StatusMethodNotAllowed, "method not allowed")
+		return false
 	}
 	if contentType := r.Header.Get("Content-Type"); contentType != "" {
 		mediaType, _, err := mime.ParseMediaType(contentType)
 		if err != nil || !strings.EqualFold(mediaType, "application/json") {
-			writeJSON(w, http.StatusUnsupportedMediaType, runner.DeployResult{OK: false, Output: "content type must be application/json"})
-			return
+			fail(http.StatusUnsupportedMediaType, "content type must be application/json")
+			return false
 		}
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
-	var req runner.DeployRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, runner.DeployResult{OK: false, Output: "invalid json"})
+	if err := decoder.Decode(dst); err != nil {
+		fail(http.StatusBadRequest, "invalid json")
+		return false
+	}
+	// A second decode must hit EOF; anything else means trailing data after the object.
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		fail(http.StatusBadRequest, "invalid json")
+		return false
+	}
+	return true
+}
+
+func (s *Server) withTarget(fn func(string) runner.Result) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		fail := func(status int, message string) {
+			writeJSON(w, status, runner.Result{OK: false, Output: message})
+		}
+		var req lgRequest
+		if !decodeJSON(w, r, 1024, &req, fail) {
+			return
+		}
+		writeJSON(w, http.StatusOK, fn(strings.TrimSpace(req.Target)))
+	}
+}
+
+func (s *Server) peerStatus(w http.ResponseWriter, r *http.Request) {
+	fail := func(status int, message string) {
+		writeJSON(w, status, runner.Result{OK: false, Output: message})
+	}
+	var req peerStatusRequest
+	if !decodeJSON(w, r, 1024, &req, fail) {
 		return
 	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		writeJSON(w, http.StatusBadRequest, runner.DeployResult{OK: false, Output: "invalid json"})
+	writeJSON(w, http.StatusOK, s.Runner.PeerStatus(req.ProtocolName))
+}
+
+func (s *Server) deployPeer(w http.ResponseWriter, r *http.Request) {
+	fail := func(status int, message string) {
+		writeJSON(w, status, runner.DeployResult{OK: false, Output: message})
+	}
+	var req runner.DeployRequest
+	if !decodeJSON(w, r, 64*1024, &req, fail) {
 		return
 	}
 	result := s.Runner.DeployPeer(req)
@@ -150,55 +162,12 @@ func (s *Server) deployPeer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (s *Server) peerStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, runner.Result{OK: false, Output: "method not allowed"})
-		return
-	}
-	if contentType := r.Header.Get("Content-Type"); contentType != "" {
-		mediaType, _, err := mime.ParseMediaType(contentType)
-		if err != nil || !strings.EqualFold(mediaType, "application/json") {
-			writeJSON(w, http.StatusUnsupportedMediaType, runner.Result{OK: false, Output: "content type must be application/json"})
-			return
-		}
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1024)
-	var req peerStatusRequest
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, runner.Result{OK: false, Output: "invalid json"})
-		return
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		writeJSON(w, http.StatusBadRequest, runner.Result{OK: false, Output: "invalid json"})
-		return
-	}
-	writeJSON(w, http.StatusOK, s.Runner.PeerStatus(req.ProtocolName))
-}
-
 func (s *Server) removePeer(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, runner.DeployResult{OK: false, Output: "method not allowed"})
-		return
+	fail := func(status int, message string) {
+		writeJSON(w, status, runner.DeployResult{OK: false, Output: message})
 	}
-	if contentType := r.Header.Get("Content-Type"); contentType != "" {
-		mediaType, _, err := mime.ParseMediaType(contentType)
-		if err != nil || !strings.EqualFold(mediaType, "application/json") {
-			writeJSON(w, http.StatusUnsupportedMediaType, runner.DeployResult{OK: false, Output: "content type must be application/json"})
-			return
-		}
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1024)
 	var req runner.RemoveRequest
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, runner.DeployResult{OK: false, Output: "invalid json"})
-		return
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		writeJSON(w, http.StatusBadRequest, runner.DeployResult{OK: false, Output: "invalid json"})
+	if !decodeJSON(w, r, 1024, &req, fail) {
 		return
 	}
 	result := s.Runner.RemovePeer(req)

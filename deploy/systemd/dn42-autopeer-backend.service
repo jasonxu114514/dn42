@@ -5,8 +5,10 @@ Wants=network-online.target
 
 [Service]
 WorkingDirectory=/opt/dn42-autopeer/backend
+Environment=HOST=127.0.0.1
+Environment=PORT=8000
 EnvironmentFile=/opt/dn42-autopeer/backend/.env
-ExecStart=/opt/dn42-autopeer/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+ExecStart=/opt/dn42-autopeer/backend/.venv/bin/uvicorn app.main:app --host ${HOST} --port ${PORT}
 Restart=on-failure
 User=autopeer
 Group=autopeer

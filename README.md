@@ -39,8 +39,9 @@ backend/app/keys/public_key.pem
 Important `.env` values:
 
 ```text
-BASE_URL=https://your-service.example
-AUTH_DOMAIN=your-service.example
+HOST=127.0.0.1
+PORT=8000
+DOMAIN=your-service.example
 SESSION_SECRET=<random secret>
 LOCAL_ASN=424242xxxx
 TELEGRAM_BOT_TOKEN=<from BotFather>
@@ -61,8 +62,13 @@ agent, and posts generated WireGuard and BIRD configs to `/v1/peers/deploy`.
 The control plane talks directly to agents: `Backend -> Agent`. Create each controlled router as
 an Agent in the admin panel with its display name, location, and Agent API URL. The backend
 generates the agent bearer token automatically. The admin panel also shows the configured control
-plane URL (`BASE_URL`) as read-only reference. Looking glass, peer creation, and deployment only
+plane URL (`DOMAIN`) as read-only reference. Looking glass, peer creation, and deployment only
 use enabled agents.
+
+`HOST` and `PORT` control where Uvicorn listens. `DOMAIN` is the public domain used in generated
+links and Kioubit verification. Use `HOST=0.0.0.0` only when the backend should accept direct
+connections from outside the server; keep `HOST=127.0.0.1` when running behind nginx or another
+reverse proxy. If `DOMAIN` has no scheme, the public URL is treated as `https://<DOMAIN>`.
 
 Run the Telegram bot:
 
@@ -77,7 +83,13 @@ Or start the backend and Telegram bot together from the repository root:
 python start.py
 ```
 
-Telegram Mini App verification requires `BASE_URL` to be a public `https://` URL. For local backend
+You can also override the backend bind address without editing `.env`:
+
+```powershell
+python start.py --host 0.0.0.0 --port 8000
+```
+
+Telegram Mini App verification requires `DOMAIN` to resolve to a public `https://` URL. For local backend
 testing without Telegram verification, run `python start.py --allow-http`.
 
 ## Agent

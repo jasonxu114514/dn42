@@ -5,7 +5,7 @@
 1. User opens `/login`.
 2. Backend creates an `auth_challenges` row with purpose `web`.
 3. WebUI renders `kioubit-auth-btn` with:
-   - `return=<BASE_URL>/auth/kioubit/callback`
+   - `return=https://<DOMAIN>/auth/kioubit/callback`
    - `token=<challenge token>`
 4. Kioubit redirects back with `params` and `signature`.
 5. Backend verifies:

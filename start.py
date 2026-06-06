@@ -37,7 +37,7 @@ def backend_python() -> Path | str:
 
 
 def print_checks(env: dict[str, str], *, strict_https: bool) -> None:
-    base_url = env.get("BASE_URL", "")
+    base_url = public_base_url(env)
     token = env.get("TELEGRAM_BOT_TOKEN", "")
 
     if not ENV_FILE.exists():
@@ -45,9 +45,31 @@ def print_checks(env: dict[str, str], *, strict_https: bool) -> None:
     if not token:
         print("[check] TELEGRAM_BOT_TOKEN is empty. Telegram bot will not start correctly.")
     if strict_https and not base_url.startswith("https://"):
-        print("[check] Telegram Web Apps require BASE_URL to start with https://")
-        print(f"[check] Current BASE_URL: {base_url or '<empty>'}")
-        print("[check] Use a public HTTPS domain or a tunnel, then restart this script.")
+        print("[check] Telegram Web Apps require DOMAIN to resolve to an HTTPS URL.")
+        print(f"[check] Current public URL: {base_url or '<empty>'}")
+        print("[check] Use a public HTTPS domain, or pass --allow-http for local testing.")
+
+
+def public_base_url(env: dict[str, str]) -> str:
+    domain = env.get("DOMAIN", "")
+    domain = domain.strip().rstrip("/")
+    if not domain:
+        return ""
+    if domain.startswith(("http://", "https://")):
+        return domain
+    return f"https://{domain}"
+
+
+def backend_bind(env: dict[str, str], host: str | None, port: int | None) -> tuple[str, int]:
+    bind_host = host or env.get("HOST", "127.0.0.1")
+    bind_port = port
+    if bind_port is None:
+        try:
+            bind_port = int(env.get("PORT", "8000"))
+        except ValueError:
+            print("[check] PORT is invalid. Falling back to 8000.")
+            bind_port = 8000
+    return bind_host, bind_port
 
 
 def stream_output(name: str, process: subprocess.Popen[str]) -> None:
@@ -94,7 +116,7 @@ def main() -> int:
     parser.add_argument(
         "--allow-http",
         action="store_true",
-        help="Start even when BASE_URL is not HTTPS. Telegram Web App verification will not work.",
+        help="Start even when DOMAIN does not resolve to HTTPS. Telegram Web App verification will not work.",
     )
     parser.add_argument(
         "--backend-only",
@@ -105,6 +127,15 @@ def main() -> int:
         "--bot-only",
         action="store_true",
         help="Start only the Telegram bot.",
+    )
+    parser.add_argument(
+        "--host",
+        help="Backend listen host. Defaults to HOST or 127.0.0.1.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        help="Backend listen port. Defaults to PORT or 8000.",
     )
     args = parser.parse_args()
 
@@ -119,17 +150,33 @@ def main() -> int:
     env = parse_env(ENV_FILE)
     print_checks(env, strict_https=not args.allow_http)
 
-    if not args.allow_http and not env.get("BASE_URL", "").startswith("https://"):
+    if not args.allow_http and not public_base_url(env).startswith("https://"):
         print("[error] Refusing to start because Telegram verification needs HTTPS.")
         print("[error] Pass --allow-http for local backend-only testing.")
         return 1
 
     python = backend_python()
+    bind_host, bind_port = backend_bind(env, args.host, args.port)
     processes: list[subprocess.Popen[str]] = []
 
     try:
         if not args.bot_only:
-            processes.append(start_process("backend", [python, "-m", "uvicorn", "app.main:app", "--reload"]))
+            processes.append(
+                start_process(
+                    "backend",
+                    [
+                        python,
+                        "-m",
+                        "uvicorn",
+                        "app.main:app",
+                        "--host",
+                        bind_host,
+                        "--port",
+                        str(bind_port),
+                        "--reload",
+                    ],
+                )
+            )
         if not args.backend_only:
             processes.append(start_process("bot", [python, "-m", "app.bot.main"]))
 

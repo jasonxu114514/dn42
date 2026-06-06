@@ -75,9 +75,9 @@ async def verify_cmd(message: Message) -> None:
     url = data["url"]
     if not url.startswith("https://"):
         await message.answer(
-            "Telegram Web Apps require an HTTPS BASE_URL.\n"
+            "Telegram Web Apps require DOMAIN to use HTTPS.\n"
             f"Current verification URL is: {url}\n\n"
-            "Set BASE_URL to a public HTTPS URL and restart both the backend and bot."
+            "Set DOMAIN to a public HTTPS domain and restart both the backend and bot."
         )
         return
 

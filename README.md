@@ -108,6 +108,10 @@ WireGuard configs are complete `wg-quick` configs. The agent writes `dn42p<peer-
 listen port is derived from the remote ASN's last five digits, so `4242420090` listens on
 `20090`.
 
+BIRD snippets are generated for BIRD2 using the dn42 wiki MP-BGP over IPv6 with Extended Next Hop
+style. Your main BIRD config must define a `template bgp dnpeers` and include the agent peer
+directory, for example `include "/etc/dn42-autopeer/bird/*";`.
+
 ## Telegram Commands
 
 ```text

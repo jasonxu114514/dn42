@@ -116,9 +116,9 @@ go build ./cmd/agent
 AGENT_LISTEN=:8080 AGENT_TOKEN=<token-from-admin-panel> ./agent
 ```
 
-On first start the backend seeds one agent named **`local`** pointing at `DEFAULT_AGENT_URL`. Add
-more routers in the admin panel (name, location, Agent API URL); the backend generates each agent's
-bearer token for you. Set that token as `AGENT_TOKEN` on the corresponding router.
+The backend starts with no agents. Add each router in the admin panel (name, location, Agent API
+URL); the backend generates each agent's bearer token for you. Set that token as `AGENT_TOKEN` on
+the corresponding router.
 
 ## Configuration reference
 
@@ -136,7 +136,6 @@ bearer token for you. Set that token as `AGENT_TOKEN` on the corresponding route
 | `TELEGRAM_BOT_TOKEN` | _(empty)_ | BotFather token; required for the bot. |
 | `TELEGRAM_BACKEND_SECRET` | `dev-telegram-secret` | Shared secret between bot and backend. **Must** be changed. |
 | `TELEGRAM_BACKEND_URL` | _(falls back to `DOMAIN`)_ | Internal URL the bot uses to reach the backend — keep `http://127.0.0.1:8000` when co-located. |
-| `DEFAULT_AGENT_URL` | `http://127.0.0.1:8080` | URL of the auto-seeded `local` agent. |
 | `ALLOW_INSECURE_DEFAULTS` | `0` | `1` tolerates placeholder secrets (local testing). |
 | `LG_RATE_LIMIT` | `20` | Max looking-glass queries per window per client IP (`0` disables). |
 | `LG_RATE_WINDOW_SECONDS` | `60` | Rate-limit window length. |
@@ -182,11 +181,16 @@ such as `1.1.1.0/24` both resolve to the route actually used.
 /create                create a peer (guided wizard)
 /edit                  edit one of your peers (guided wizard)
 /delete                delete one of your peers (guided wizard)
-/ping  <ip-or-host> [agent]
-/trace <ip-or-host> [agent]      (/mtr is kept as an alias)
-/route <prefix-or-ip> [agent]
+/ping  <ip-or-host>              random PoP, switch with the buttons
+/trace <ip-or-host>              random PoP, switch with the buttons (/mtr is an alias)
+/route <prefix-or-ip>            random PoP, switch with the buttons
 /cancel                abort the current guided action
 ```
+
+Each looking-glass command (`/ping`, `/trace`/`/mtr`, `/route`) takes only the target; the bot
+runs it on a random PoP immediately and shows the output with one inline button per PoP — tap a
+button to re-run on that PoP, editing the result in place. (The old `/ping <ip> <agent>` positional
+argument is gone.)
 
 Run the bot alongside the backend with `python start.py`, or on its own:
 

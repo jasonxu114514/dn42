@@ -1,15 +1,21 @@
 import asyncio
 import json
+import random
 import re
+import secrets
 from collections.abc import Awaitable
 from typing import Any
 
 import httpx
 from aiogram import Bot, Dispatcher, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup, default_state
 from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
@@ -89,9 +95,9 @@ HELP_TEXT = (
     "/create - create a peer (guided)\n"
     "/edit - edit one of your peers (guided)\n"
     "/delete - delete one of your peers (guided)\n"
-    "/ping <ip-or-host> [agent]\n"
-    "/trace <ip-or-host> [agent]\n"
-    "/route <prefix-or-ip> [agent]\n"
+    "/ping <ip-or-host> - random PoP; tap a button to switch\n"
+    "/trace <ip-or-host> - random PoP; tap a button to switch\n"
+    "/route <prefix-or-ip> - random PoP; tap a button to switch\n"
     "/cancel - abort the current guided action"
 )
 
@@ -186,6 +192,29 @@ def agent_keyboard(agents: list[dict]) -> ReplyKeyboardMarkup:
 def peer_keyboard(peers: list[dict]) -> ReplyKeyboardMarkup:
     rows = [[KeyboardButton(text=f"#{p['id']}")] for p in peers]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
+
+
+def lg_agent_inline_keyboard(
+    agent_names: list[str], token: str, active: str | None = None
+) -> InlineKeyboardMarkup:
+    """Buttons (≤3 per row) for picking the looking-glass PoP; ``active`` gets a • marker.
+
+    callback_data carries only ``lg:<token>:<index>`` — never the target — so it stays well
+    within Telegram's 64-byte limit even for long IPv6/hostname targets. ``token`` ties the
+    buttons to the FSM entry created for this command (see ``run_lg``/``lg_choose``).
+    callback_data 僅帶 ``lg:<token>:<index>``（不含目標），即使目標為長 IPv6／主機名也遠低於
+    Telegram 的 64 byte 上限；``token`` 將按鈕綁定到該次指令建立的 FSM 記錄；``active`` 為目前
+    顯示輸出的 PoP，加上 • 標記。
+    """
+    buttons = [
+        InlineKeyboardButton(
+            text=f"• {name}" if name == active else name,
+            callback_data=f"lg:{token}:{index}",
+        )
+        for index, name in enumerate(agent_names)
+    ]
+    rows = [buttons[i : i + 3] for i in range(0, len(buttons), 3)]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def reject_if_command(message: Message, action: str) -> bool:
@@ -351,52 +380,159 @@ async def status_cmd(message: Message) -> None:
 # --- Looking glass -------------------------------------------------------------------------
 
 
-def parse_lg_args(message: Message) -> tuple[str, str]:
+def parse_lg_target(message: Message) -> str:
+    """Pull the single target out of ``/<command> <target>``.
+
+    The PoP/agent is no longer a positional argument — it is chosen from the inline buttons
+    attached to the reply — so any extra tokens are ignored.
+    PoP／agent 不再是位置參數（改由回覆訊息上的內嵌按鈕選擇），因此會忽略多餘的 token。
+    """
     parts = (message.text or "").split()
     if len(parts) < 2:
-        raise ValueError("Usage: /<command> <target> [agent]")
-    target = parts[1]
-    agent = parts[2] if len(parts) > 2 else "local"
-    return target, agent
+        raise ValueError("Usage: /<command> <target>")
+    return parts[1]
 
 
-async def run_lg(message: Message, query_type: str) -> None:
+async def run_lg(message: Message, state: FSMContext, query_type: str) -> None:
+    """Run the query on a random PoP immediately, then let the user switch PoPs via buttons.
+
+    立即在隨機 PoP 上執行，並附按鈕讓使用者切換 PoP（結果就地以 edit 更新）。
+    """
     try:
-        target, agent = parse_lg_args(message)
+        target = parse_lg_target(message)
     except ValueError as exc:
         await message.answer(str(exc))
         return
-    result = await call_backend(
+    data = await call_backend(
         message,
-        backend.post(
+        backend.get("/api/telegram/agents"),
+        error_prefix="Could not load agents",
+    )
+    if data is None:
+        return
+    names = [agent["name"] for agent in data.get("agents", [])]
+    if not names:
+        await message.answer("No agents are available right now.")
+        return
+    # A fresh token per command so a tap only runs against the query it was shown with; a newer
+    # /ping|/trace|/route overwrites it, expiring the previous message's buttons (see lg_choose).
+    # 每次指令產生新 token：點擊只會對其所屬查詢生效；較新的 LG 指令會覆蓋它，使舊訊息的按鈕失效。
+    token = secrets.token_urlsafe(6)
+    await state.update_data(
+        lg_token=token, lg_query_type=query_type, lg_target=target, lg_agents=names
+    )
+    # Pick a random PoP and show output right away; the user can switch via the buttons.
+    # 隨機挑一個 PoP 立即顯示輸出；使用者可再用按鈕切換。
+    agent = random.choice(names)
+    placeholder = await message.answer(
+        format_block(f"{query_type} {target} @ {agent}\n\nrunning…"),
+        parse_mode="Markdown",
+        reply_markup=lg_agent_inline_keyboard(names, token, active=agent),
+    )
+    await render_lg(
+        placeholder,
+        user_id=message.from_user.id,
+        query_type=query_type,
+        target=target,
+        agent=agent,
+        names=names,
+        token=token,
+    )
+
+
+async def render_lg(
+    message: Message,
+    *,
+    user_id: int,
+    query_type: str,
+    target: str,
+    agent: str,
+    names: list[str],
+    token: str,
+) -> None:
+    """Run one looking-glass query and edit ``message`` in place with the labelled output.
+
+    The keyboard is re-attached (``agent`` marked) so the user can keep switching PoPs on the
+    same message; an HTTP error is shown in the block rather than as a separate message.
+    重新附上鍵盤（標記 ``agent``）讓使用者可在同一訊息持續切換 PoP；HTTP 錯誤直接顯示於區塊內。
+    """
+    try:
+        result = await backend.post(
             "/api/telegram/lg",
             {
-                "telegram_user_id": str(message.from_user.id),
+                "telegram_user_id": str(user_id),
                 "agent": agent,
                 "query_type": query_type,
                 "target": target,
             },
-        ),
-        error_prefix="Looking glass failed",
-    )
-    if result is None:
+        )
+        body = str(result.get("output", result))
+    except httpx.HTTPStatusError as exc:
+        body = f"Looking glass failed: {detail_of(exc)}"
+    except httpx.HTTPError as exc:
+        body = f"Looking glass failed: {exc}"
+    text = format_block(f"{query_type} {target} @ {agent}\n\n{body}")
+    try:
+        await message.edit_text(
+            text,
+            parse_mode="Markdown",
+            reply_markup=lg_agent_inline_keyboard(names, token, active=agent),
+        )
+    except TelegramBadRequest:
+        # e.g. "message is not modified" when the same PoP is tapped twice with identical output.
+        pass
+
+
+@dp.callback_query(F.data.startswith("lg:"))
+async def lg_choose(callback: CallbackQuery, state: FSMContext) -> None:
+    """Re-run the query on the tapped PoP and edit the message output in place.
+
+    The FSM token (set in ``run_lg``) keeps stale buttons — and, in a group, taps from anyone
+    other than the issuer — from firing, since FSM data is keyed per chat+user.
+    由 FSM token 阻擋過期按鈕；群組中 FSM 以 chat+user 為鍵，故非發起者的點擊亦無效。
+    """
+    try:
+        _, token, index_text = callback.data.split(":", 2)
+        index = int(index_text)
+    except ValueError:
+        await callback.answer("Invalid selection.")
         return
-    await message.answer(format_block(str(result.get("output", result))), parse_mode="Markdown")
+    data = await state.get_data()
+    if data.get("lg_token") != token:
+        await callback.answer("This menu expired — re-run the command.", show_alert=True)
+        return
+    names = data.get("lg_agents", [])
+    if not 0 <= index < len(names):
+        await callback.answer("Invalid selection.")
+        return
+    agent = names[index]
+    query_type = data["lg_query_type"]
+    target = data["lg_target"]
+    await callback.answer(f"Running {query_type} on {agent}…")
+    await render_lg(
+        callback.message,
+        user_id=callback.from_user.id,
+        query_type=query_type,
+        target=target,
+        agent=agent,
+        names=names,
+        token=token,
+    )
 
 
 @dp.message(Command("ping"), default_state)
-async def ping_cmd(message: Message) -> None:
-    await run_lg(message, "ping")
+async def ping_cmd(message: Message, state: FSMContext) -> None:
+    await run_lg(message, state, "ping")
 
 
 @dp.message(Command("trace", "mtr"), default_state)
-async def trace_cmd(message: Message) -> None:
-    await run_lg(message, "trace")
+async def trace_cmd(message: Message, state: FSMContext) -> None:
+    await run_lg(message, state, "trace")
 
 
 @dp.message(Command("route"), default_state)
-async def route_cmd(message: Message) -> None:
-    await run_lg(message, "route")
+async def route_cmd(message: Message, state: FSMContext) -> None:
+    await run_lg(message, state, "route")
 
 
 # --- Guided peer management ----------------------------------------------------------------

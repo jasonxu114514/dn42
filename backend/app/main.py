@@ -1,8 +1,8 @@
 """FastAPI application factory for the dn42 autopeer control plane.
 
 Wires the session middleware, static files, and the API + web routers, and runs startup/shutdown
-through the lifespan handler: the insecure-secret guard, schema creation, default seeding, and
-teardown of the pooled looking-glass HTTP client.
+through the lifespan handler: the insecure-secret guard, schema creation, and teardown of the
+pooled looking-glass HTTP client.
 """
 
 import logging
@@ -15,8 +15,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.api.telegram import router as telegram_router
 from app.config import get_settings
-from app.db.init_db import create_schema, seed_defaults
-from app.db.session import SessionLocal
+from app.db.init_db import create_schema
 from app.lg.client import aclose_shared_client
 from app.web.admin import router as admin_router
 from app.web.lg import router as lg_router
@@ -43,11 +42,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             ", ".join(insecure),
         )
     create_schema()
-    db = SessionLocal()
-    try:
-        seed_defaults(db, settings)
-    finally:
-        db.close()
     yield
     await aclose_shared_client()
 

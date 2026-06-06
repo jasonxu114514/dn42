@@ -26,8 +26,6 @@ class Settings(BaseSettings):
     telegram_backend_secret: str = "dev-telegram-secret"
     telegram_backend_url: str = ""
 
-    default_agent_url: str = "http://127.0.0.1:8080"
-
     allow_insecure_defaults: bool = False
     lg_rate_limit: int = 20
     lg_rate_window_seconds: int = 60

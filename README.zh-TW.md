@@ -109,9 +109,8 @@ go build ./cmd/agent
 AGENT_LISTEN=:8080 AGENT_TOKEN=<管理面板取得的-token> ./agent
 ```
 
-後端首次啟動時會植入一個名為 **`local`** 的 agent，指向 `DEFAULT_AGENT_URL`。可在管理面板新增更多
-路由器（名稱、位置、Agent API URL）；後端會為每個 agent 產生 bearer token。請將該 token 設為對應
-路由器上的 `AGENT_TOKEN`。
+後端啟動時不會內建任何 agent。請在管理面板新增每個路由器（名稱、位置、Agent API URL）；後端會為每個
+agent 產生 bearer token。請將該 token 設為對應路由器上的 `AGENT_TOKEN`。
 
 ## 設定參考
 
@@ -129,7 +128,6 @@ AGENT_LISTEN=:8080 AGENT_TOKEN=<管理面板取得的-token> ./agent
 | `TELEGRAM_BOT_TOKEN` | _（空）_ | BotFather token；bot 必需。 |
 | `TELEGRAM_BACKEND_SECRET` | `dev-telegram-secret` | bot 與後端間的共享密鑰。**必須**更換。 |
 | `TELEGRAM_BACKEND_URL` | _（退回 `DOMAIN`）_ | bot 連到後端所用的內部 URL——同機時維持 `http://127.0.0.1:8000`。 |
-| `DEFAULT_AGENT_URL` | `http://127.0.0.1:8080` | 自動植入的 `local` agent 的 URL。 |
 | `ALLOW_INSECURE_DEFAULTS` | `0` | `1` 容忍佔位密鑰（本地測試）。 |
 | `LG_RATE_LIMIT` | `20` | 每個來源 IP 每個窗口的 looking-glass 查詢上限（`0` 停用）。 |
 | `LG_RATE_WINDOW_SECONDS` | `60` | 速率限制窗口長度。 |
@@ -173,11 +171,15 @@ agent 端解析）；`route` 採最長前綴查找,故單一主機 IP 或 `1.1.1
 /create                建立對等（引導式精靈）
 /edit                  編輯你的某個對等（引導式精靈）
 /delete                刪除你的某個對等（引導式精靈）
-/ping  <ip-或-主機名> [agent]
-/trace <ip-或-主機名> [agent]      （保留 /mtr 作為別名）
-/route <前綴-或-ip> [agent]
+/ping  <ip-或-主機名>            隨機 PoP，可用按鈕切換
+/trace <ip-或-主機名>            隨機 PoP，可用按鈕切換（保留 /mtr 作為別名）
+/route <前綴-或-ip>              隨機 PoP，可用按鈕切換
 /cancel                中止目前的引導式動作
 ```
+
+各 looking glass 指令（`/ping`、`/trace`／`/mtr`、`/route`）只接受目標；bot 會立即在隨機 PoP 上執行
+並顯示輸出，並附上每個 PoP 一個內嵌按鈕——點按鈕即在該 PoP 重跑並就地更新結果。（舊的
+`/ping <ip> <agent>` 位置參數已移除。）
 
 以 `python start.py` 與後端一起執行 bot，或單獨執行：
 

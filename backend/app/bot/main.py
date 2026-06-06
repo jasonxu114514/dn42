@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+from collections.abc import Awaitable
 from typing import Any
 
 import httpx
@@ -21,6 +22,8 @@ from app.config import get_settings
 settings = get_settings()
 
 WG_KEY_RE = re.compile(r"^[A-Za-z0-9+/]{43}=$")
+
+NOT_LINKED_MSG = "Your Telegram account is not linked to a dn42 ASN yet. Use /login first."
 
 
 class Backend:
@@ -109,6 +112,32 @@ def detail_of(exc: httpx.HTTPStatusError) -> str:
     return str(payload.get("detail", exc.response.text))
 
 
+async def call_backend(
+    message: Message,
+    request: Awaitable[dict[str, Any]],
+    *,
+    error_prefix: str,
+    reply_markup: ReplyKeyboardRemove | None = None,
+    not_found_message: str | None = None,
+) -> dict[str, Any] | None:
+    """Await a backend call; on any HTTP error, answer the user and return ``None``.
+
+    集中處理 bot 對後端呼叫的錯誤：成功回傳解析後的 JSON；發生 HTTP 錯誤時，向使用者回覆乾淨的
+    訊息（4xx 取 FastAPI 的 ``detail``）並回傳 None。404 可用 ``not_found_message`` 客製。
+    """
+    try:
+        return await request
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404 and not_found_message is not None:
+            await message.answer(not_found_message, reply_markup=reply_markup)
+        else:
+            await message.answer(f"{error_prefix}: {detail_of(exc)}", reply_markup=reply_markup)
+        return None
+    except httpx.HTTPError as exc:
+        await message.answer(f"{error_prefix}: {exc}", reply_markup=reply_markup)
+        return None
+
+
 def format_block(text: str, limit: int = 3900) -> str:
     text = text or "(no output)"
     if len(text) > limit:
@@ -169,18 +198,13 @@ async def reject_if_command(message: Message, action: str) -> bool:
 
 async def load_user_peers(message: Message) -> list[dict] | None:
     """Return the caller's peers, or None after answering with the reason (unverified / error)."""
-    try:
-        data = await backend.get(f"/api/telegram/peer/{message.from_user.id}")
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 404:
-            await message.answer(
-                "Your Telegram account is not linked to a dn42 ASN yet. Use /login first."
-            )
-        else:
-            await message.answer(f"Could not load your peers: {detail_of(exc)}")
-        return None
-    except httpx.HTTPError as exc:
-        await message.answer(f"Could not load your peers: {exc}")
+    data = await call_backend(
+        message,
+        backend.get(f"/api/telegram/peer/{message.from_user.id}"),
+        error_prefix="Could not load your peers",
+        not_found_message=NOT_LINKED_MSG,
+    )
+    if data is None:
         return None
     return data.get("peers", [])
 
@@ -223,10 +247,12 @@ async def help_cmd(message: Message) -> None:
 
 @dp.message(Command("verify", "login"), default_state)
 async def verify_cmd(message: Message) -> None:
-    try:
-        data = await backend.post("/api/telegram/challenge", user_payload(message))
-    except httpx.HTTPError as exc:
-        await message.answer(f"Could not create verification challenge: {exc}")
+    data = await call_backend(
+        message,
+        backend.post("/api/telegram/challenge", user_payload(message)),
+        error_prefix="Could not create verification challenge",
+    )
+    if data is None:
         return
 
     url = data["url"]
@@ -263,15 +289,16 @@ async def web_app_data(message: Message) -> None:
             "params": envelope["params"],
             "signature": envelope["signature"],
         }
-        result = await backend.post("/api/telegram/verify", payload)
     except (KeyError, json.JSONDecodeError) as exc:
         await message.answer(f"Verification data was malformed: {exc}")
         return
-    except httpx.HTTPStatusError as exc:
-        await message.answer(f"Verification failed: {exc.response.text}")
-        return
-    except httpx.HTTPError as exc:
-        await message.answer(f"Verification failed: {exc}")
+
+    result = await call_backend(
+        message,
+        backend.post("/api/telegram/verify", payload),
+        error_prefix="Verification failed",
+    )
+    if result is None:
         return
 
     await message.answer(
@@ -298,15 +325,12 @@ async def peer_cmd(message: Message) -> None:
 
 @dp.message(Command("status"), default_state)
 async def status_cmd(message: Message) -> None:
-    try:
-        result = await backend.post(
-            "/api/telegram/status", {"telegram_user_id": str(message.from_user.id)}
-        )
-    except httpx.HTTPStatusError as exc:
-        await message.answer(f"Status lookup failed: {detail_of(exc)}")
-        return
-    except httpx.HTTPError as exc:
-        await message.answer(f"Status lookup failed: {exc}")
+    result = await call_backend(
+        message,
+        backend.post("/api/telegram/status", {"telegram_user_id": str(message.from_user.id)}),
+        error_prefix="Status lookup failed",
+    )
+    if result is None:
         return
 
     peers = result.get("peers", [])
@@ -339,7 +363,12 @@ def parse_lg_args(message: Message) -> tuple[str, str]:
 async def run_lg(message: Message, query_type: str) -> None:
     try:
         target, agent = parse_lg_args(message)
-        result = await backend.post(
+    except ValueError as exc:
+        await message.answer(str(exc))
+        return
+    result = await call_backend(
+        message,
+        backend.post(
             "/api/telegram/lg",
             {
                 "telegram_user_id": str(message.from_user.id),
@@ -347,17 +376,11 @@ async def run_lg(message: Message, query_type: str) -> None:
                 "query_type": query_type,
                 "target": target,
             },
-        )
-    except ValueError as exc:
-        await message.answer(str(exc))
+        ),
+        error_prefix="Looking glass failed",
+    )
+    if result is None:
         return
-    except httpx.HTTPStatusError as exc:
-        await message.answer(f"Looking glass failed: {detail_of(exc)}")
-        return
-    except httpx.HTTPError as exc:
-        await message.answer(f"Looking glass failed: {exc}")
-        return
-
     await message.answer(format_block(str(result.get("output", result))), parse_mode="Markdown")
 
 
@@ -394,24 +417,21 @@ async def cancel_cmd(message: Message, state: FSMContext) -> None:
 async def create_cmd(message: Message, state: FSMContext) -> None:
     await state.clear()
     # Confirm the account is verified before starting the wizard.
-    try:
-        await backend.get(f"/api/telegram/peer/{message.from_user.id}")
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 404:
-            await message.answer(
-                "Your Telegram account is not linked to a dn42 ASN yet. Use /login first."
-            )
-        else:
-            await message.answer(f"Could not start: {detail_of(exc)}")
-        return
-    except httpx.HTTPError as exc:
-        await message.answer(f"Could not start: {exc}")
+    verified = await call_backend(
+        message,
+        backend.get(f"/api/telegram/peer/{message.from_user.id}"),
+        error_prefix="Could not start",
+        not_found_message=NOT_LINKED_MSG,
+    )
+    if verified is None:
         return
 
-    try:
-        data = await backend.get("/api/telegram/agents")
-    except httpx.HTTPError as exc:
-        await message.answer(f"Could not load agents: {exc}")
+    data = await call_backend(
+        message,
+        backend.get("/api/telegram/agents"),
+        error_prefix="Could not load agents",
+    )
+    if data is None:
         return
     agents = data.get("agents", [])
     if not agents:
@@ -508,13 +528,13 @@ async def create_key_step(message: Message, state: FSMContext) -> None:
         "endpoint": data["endpoint"],
         "wg_public_key": key,
     }
-    try:
-        result = await backend.post("/api/telegram/peer/create", payload)
-    except httpx.HTTPStatusError as exc:
-        await message.answer(f"Create failed: {detail_of(exc)}", reply_markup=ReplyKeyboardRemove())
-        return
-    except httpx.HTTPError as exc:
-        await message.answer(f"Create failed: {exc}", reply_markup=ReplyKeyboardRemove())
+    result = await call_backend(
+        message,
+        backend.post("/api/telegram/peer/create", payload),
+        error_prefix="Create failed",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    if result is None:
         return
     await send_peer_result(message, "Created", result)
 
@@ -563,13 +583,13 @@ async def edit_key_step(message: Message, state: FSMContext) -> None:
         "endpoint": data["endpoint"],
         "wg_public_key": key,
     }
-    try:
-        result = await backend.post("/api/telegram/peer/edit", payload)
-    except httpx.HTTPStatusError as exc:
-        await message.answer(f"Edit failed: {detail_of(exc)}", reply_markup=ReplyKeyboardRemove())
-        return
-    except httpx.HTTPError as exc:
-        await message.answer(f"Edit failed: {exc}", reply_markup=ReplyKeyboardRemove())
+    result = await call_backend(
+        message,
+        backend.post("/api/telegram/peer/edit", payload),
+        error_prefix="Edit failed",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    if result is None:
         return
     await send_peer_result(message, "Updated", result)
 
@@ -605,16 +625,15 @@ async def delete_confirm_step(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     await state.clear()
     peer_id = data["peer_id"]
-    try:
-        await backend.post(
+    deleted = await call_backend(
+        message,
+        backend.post(
             "/api/telegram/peer/delete",
             {"telegram_user_id": str(message.from_user.id), "peer_id": peer_id},
-        )
-    except httpx.HTTPStatusError as exc:
-        await message.answer(f"Delete failed: {detail_of(exc)}")
-        return
-    except httpx.HTTPError as exc:
-        await message.answer(f"Delete failed: {exc}")
+        ),
+        error_prefix="Delete failed",
+    )
+    if deleted is None:
         return
     await message.answer(f"Deleted peer #{peer_id}.")
 

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <!-- For best performance define in <head> -->
+    <script src="kioubit-auth-button-window.js"></script>
+</head>
+
+<body>
+<h1>Example</h1>
+<kioubit-auth-btn-window return="/auth-success.html" validity="60" localStoragePrefix="login"></kioubit-auth-btn-window>
+</body>
+
+<script>
+    // Listen for successful authentication
+    const authBtn = document.querySelector('kioubit-auth-btn-window');
+
+    authBtn.addEventListener('authsuccess', (event) => {
+        const token = event.detail.token;
+        console.log('Authentication successful:', token);
+        // Handle successful authentication
+    });
+
+    authBtn.addEventListener('autherror', (event) => {
+        console.error('Authentication error:', event.detail.error);
+        // Handle authentication error
+    });
+</script>
+</html>

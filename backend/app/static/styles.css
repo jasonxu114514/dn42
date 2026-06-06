@@ -1,0 +1,142 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f8;
+  --fg: #1f2428;
+  --muted: #66707a;
+  --panel: #ffffff;
+  --line: #d8dee4;
+  --accent: #0b7285;
+  --accent-fg: #ffffff;
+  --bad: #9b1c1c;
+  --ok: #116329;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.brand {
+  color: var(--fg);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+nav {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+a {
+  color: var(--accent);
+}
+
+main {
+  width: min(1100px, calc(100vw - 32px));
+  margin: 24px auto;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 18px;
+}
+
+.narrow {
+  max-width: 560px;
+  margin-inline: auto;
+}
+
+.centered {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+}
+
+.hidden {
+  display: none;
+}
+
+.grid-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 14px;
+  align-items: end;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+input,
+select,
+button {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 10px;
+  font: inherit;
+}
+
+button {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+  cursor: pointer;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  border-bottom: 1px solid var(--line);
+  padding: 10px;
+  text-align: left;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.actions form {
+  margin: 0;
+}
+
+.terminal {
+  overflow-x: auto;
+  padding: 14px;
+  background: #111827;
+  color: #e5e7eb;
+  border-radius: 6px;
+  min-height: 120px;
+}
+
+.terminal.ok {
+  border-left: 4px solid var(--ok);
+}
+
+.terminal.bad {
+  border-left: 4px solid var(--bad);
+}

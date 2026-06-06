@@ -1,0 +1,15 @@
+[Unit]
+Description=dn42 Autopeer Backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/dn42-autopeer/backend
+EnvironmentFile=/opt/dn42-autopeer/backend/.env
+ExecStart=/opt/dn42-autopeer/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+User=autopeer
+Group=autopeer
+
+[Install]
+WantedBy=multi-user.target

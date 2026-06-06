@@ -1,0 +1,16 @@
+[Unit]
+Description=dn42 Autopeer Node Agent
+After=network-online.target bird.service
+Wants=network-online.target
+
+[Service]
+Environment=AGENT_LISTEN=127.0.0.1:8080
+Environment=AGENT_TOKEN=change-me
+Environment=BIRDC_PATH=/usr/sbin/birdc
+ExecStart=/usr/local/bin/dn42-autopeer-agent
+Restart=on-failure
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

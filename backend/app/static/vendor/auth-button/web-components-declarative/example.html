@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <!-- Preload needed resources in <head> -->
+    <link rel="preload" href="auth.css" as="style">
+    <link rel="preload" href="auth.svg" as="image">
+</head>
+
+<h1>Example</h1>
+<kioubit-auth-btn>
+    <template shadowrootmode="closed">
+        <link rel="stylesheet" href="auth.css" />
+        <form action="https://dn42.g-load.eu/auth/">
+            <input type="hidden" name="return" value="http://example.org">
+            <input type="hidden" name="token" value="">
+            <button type="submit" class="kioubit-btn-dark" part="button">
+                <img width="35" height="35" src="auth.svg" alt="Kioubit.dn42 logo" class="kioubit-btn-logo">
+                Authenticate with Kioubit.dn42
+            </button>
+        </form>
+    </template>
+</kioubit-auth-btn>
+
+</html>

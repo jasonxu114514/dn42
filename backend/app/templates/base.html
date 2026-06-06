@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ settings.app_name }}</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">{{ settings.app_name }}</a>
+    <nav>
+      <a href="/">Looking Glass</a>
+      {% if user %}
+        <a href="/portal">Portal</a>
+        {% if user.is_admin %}<a href="/admin">Admin</a>{% endif %}
+        <a href="/logout">Logout AS{{ user.primary_asn }}</a>
+      {% else %}
+        <a href="/login">Login</a>
+      {% endif %}
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

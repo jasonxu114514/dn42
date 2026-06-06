@@ -1,0 +1,17 @@
+.gocache/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
+autopeer.db
+
+# Go build output
+agent/agent
+agent/agent.exe
+
+# OS/editor
+.DS_Store
+Thumbs.db

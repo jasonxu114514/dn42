@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Authentication Success</title>
+</head>
+<body>
+<script>
+    const urlParams = window.location.search;
+
+    if (window.opener) {
+        if (urlParams !== "") {
+            window.opener.postMessage({
+                type: 'AUTH_SUCCESS',
+                token: urlParams.substring(1)
+            }, window.location.origin);
+        } else {
+            window.opener.postMessage({
+                type: 'AUTH_ERROR',
+            }, window.location.origin);
+        }
+        window.close();
+    } else {
+        document.body.innerHTML = '<p>Authentication completed. You can close this window.</p>';
+    }
+</script>
+</body>
+</html>

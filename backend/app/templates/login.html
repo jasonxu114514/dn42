@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel narrow">
+  <h1>Authenticate</h1>
+  <p>Use Kioubit.dn42 to prove control of your dn42 ASN.</p>
+  <script src="/static/kioubit-auth-button.js"></script>
+  <kioubit-auth-btn return="{{ return_url }}" token="{{ token }}"></kioubit-auth-btn>
+</section>
+{% endblock %}

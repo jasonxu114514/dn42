@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h1>User Portal</h1>
+  <p>Authenticated as AS{{ user.primary_asn }}.</p>
+  <form method="post" action="/portal/peers" class="grid-form">
+    <label>Node
+      <select name="node_id">
+        {% for node in nodes %}
+          <option value="{{ node.id }}">{{ node.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Endpoint
+      <input name="endpoint" placeholder="host:port" required>
+    </label>
+    <label>WireGuard public key
+      <input name="wg_public_key" required>
+    </label>
+    <button type="submit">Request Peer</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Your Peer Requests</h2>
+  <table>
+    <thead><tr><th>ID</th><th>ASN</th><th>Node</th><th>Status</th><th>Config</th></tr></thead>
+    <tbody>
+      {% for peer in peers %}
+        <tr>
+          <td>#{{ peer.id }}</td>
+          <td>{{ peer.asn }}</td>
+          <td>{{ peer.node.name }}</td>
+          <td>{{ peer.status }}</td>
+          <td><a href="/portal/peers/{{ peer.id }}/config">view</a></td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

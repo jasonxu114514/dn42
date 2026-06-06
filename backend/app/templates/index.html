@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h1>Looking Glass</h1>
+  <form method="post" action="/lg" class="grid-form">
+    <label>Node
+      <select name="node_id">
+        {% for node in nodes %}
+          <option value="{{ node.id }}">{{ node.name }}{% if node.location %} - {{ node.location }}{% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Query
+      <select name="query_type">
+        <option value="ping">ping</option>
+        <option value="mtr">mtr</option>
+        <option value="route">route</option>
+        <option value="status">status</option>
+      </select>
+    </label>
+    <label>Target
+      <input name="target" placeholder="172.20.0.1 or fd00::1">
+    </label>
+    <button type="submit">Run</button>
+  </form>
+  {% if lg_result %}
+    <pre class="terminal {% if lg_ok %}ok{% else %}bad{% endif %}">{{ lg_result }}</pre>
+  {% endif %}
+</section>
+{% endblock %}

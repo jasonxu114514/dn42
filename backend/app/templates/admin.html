@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h1>Admin</h1>
+  <h2>Peer Requests</h2>
+  <table>
+    <thead><tr><th>ID</th><th>ASN</th><th>Node</th><th>Endpoint</th><th>Status</th><th>Actions</th></tr></thead>
+    <tbody>
+      {% for peer in peers %}
+        <tr>
+          <td>#{{ peer.id }}</td>
+          <td>{{ peer.asn }}</td>
+          <td>{{ peer.node.name }}</td>
+          <td>{{ peer.endpoint }}</td>
+          <td>{{ peer.status }}</td>
+          <td class="actions">
+            <form method="post" action="/admin/peers/{{ peer.id }}/approve"><button>Approve</button></form>
+            <form method="post" action="/admin/peers/{{ peer.id }}/reject"><button>Reject</button></form>
+            <a href="/admin/peers/{{ peer.id }}/config">config</a>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>Nodes</h2>
+  <table>
+    <thead><tr><th>Name</th><th>Location</th><th>Agent</th><th>Enabled</th></tr></thead>
+    <tbody>
+      {% for node in nodes %}
+        <tr><td>{{ node.name }}</td><td>{{ node.location }}</td><td>{{ node.agent_url }}</td><td>{{ node.enabled }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

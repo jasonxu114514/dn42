@@ -3,9 +3,7 @@ from typing import Any
 import httpx
 
 from app.db.models import Node
-
-
-ALLOWED_QUERY_TYPES = {"ping", "mtr", "route", "status"}
+from app.lg.validation import validate_query_type, validate_target
 
 
 class AgentClient:
@@ -13,8 +11,8 @@ class AgentClient:
         self.timeout = timeout
 
     async def query(self, node: Node, query_type: str, target: str = "") -> dict[str, Any]:
-        if query_type not in ALLOWED_QUERY_TYPES:
-            raise ValueError("Unsupported looking glass query")
+        query_type = validate_query_type(query_type)
+        target = validate_target(query_type, target)
         headers = {"Authorization": f"Bearer {node.agent_token}"} if node.agent_token else {}
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             if query_type == "status":

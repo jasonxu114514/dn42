@@ -14,6 +14,7 @@ from app.db.init_db import create_schema, seed_defaults
 from app.db.models import LGQuery, Node, PeerRequest, utcnow
 from app.db.session import SessionLocal, get_db
 from app.lg.client import AgentClient
+from app.lg.validation import validate_query_type, validate_target
 from app.peer.config import render_operator_config, render_user_config
 
 settings = get_settings()
@@ -221,8 +222,12 @@ async def looking_glass(
         raise HTTPException(status_code=400, detail="Unknown node")
     result_text = ""
     ok = False
+    normalized_query_type = query_type
+    normalized_target = target.strip()
     try:
-        result = await AgentClient().query(node, query_type, target.strip())
+        normalized_query_type = validate_query_type(query_type)
+        normalized_target = validate_target(normalized_query_type, target)
+        result = await AgentClient().query(node, normalized_query_type, normalized_target)
         ok = bool(result.get("ok", False))
         result_text = str(result.get("output", result))
     except Exception as exc:
@@ -232,8 +237,8 @@ async def looking_glass(
         LGQuery(
             user_id=user.id if user else None,
             node_id=node.id,
-            query_type=query_type,
-            target=target.strip(),
+            query_type=normalized_query_type,
+            target=normalized_target,
             ok=ok,
             result=result_text,
         )
@@ -243,5 +248,5 @@ async def looking_glass(
     return render(
         request,
         "index.html",
-        {"nodes": nodes, "lg_result": result_text, "lg_ok": ok, "last_query": query_type},
+        {"nodes": nodes, "lg_result": result_text, "lg_ok": ok, "last_query": normalized_query_type},
     )

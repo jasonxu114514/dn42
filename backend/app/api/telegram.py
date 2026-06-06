@@ -1,7 +1,8 @@
 from typing import Any
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.auth.kioubit import KioubitAuthError, KioubitVerifier
@@ -21,8 +22,10 @@ router = APIRouter(prefix="/api/telegram", tags=["telegram"])
 
 
 class ChallengeRequest(BaseModel):
-    telegram_user_id: str
-    telegram_chat_id: str
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    telegram_user_id: str = Field(pattern=r"^\d{1,20}$")
+    telegram_chat_id: str = Field(pattern=r"^-?\d{1,20}$")
 
 
 class ChallengeResponse(BaseModel):
@@ -31,18 +34,22 @@ class ChallengeResponse(BaseModel):
 
 
 class VerifyRequest(BaseModel):
-    telegram_user_id: str
-    telegram_chat_id: str
-    username: str | None = None
-    params: str
-    signature: str
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    telegram_user_id: str = Field(pattern=r"^\d{1,20}$")
+    telegram_chat_id: str = Field(pattern=r"^-?\d{1,20}$")
+    username: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_]{1,64}$")
+    params: str = Field(min_length=1, max_length=8192)
+    signature: str = Field(min_length=1, max_length=8192)
 
 
 class LGRequest(BaseModel):
-    telegram_user_id: str
-    node: str = "local"
-    query_type: str
-    target: str = ""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    telegram_user_id: str = Field(pattern=r"^\d{1,20}$")
+    node: str = Field(default="local", pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    query_type: Literal["ping", "mtr", "route", "status"]
+    target: str = Field(default="", max_length=255)
 
 
 def require_bot_secret(x_backend_secret: str = Header("")) -> None:
@@ -131,4 +138,7 @@ async def telegram_lg(payload: LGRequest, db: Session = Depends(get_db)) -> dict
     )
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
-    return await AgentClient().query(node, payload.query_type, payload.target)
+    try:
+        return await AgentClient().query(node, payload.query_type, payload.target)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -58,9 +58,9 @@ async def help_cmd(message: Message) -> None:
         "/verify - link your dn42 ASN\n"
         "/peer - show your peer requests\n"
         "/status [node] - show node status\n"
-        "/ping <target> [node]\n"
-        "/mtr <target> [node]\n"
-        "/route <prefix|ip> [node]"
+        "/ping <dn42-ip> [node]\n"
+        "/mtr <dn42-ip> [node]\n"
+        "/route <dn42-prefix|dn42-ip> [node]"
     )
 
 

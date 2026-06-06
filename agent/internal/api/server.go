@@ -2,6 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
+	"mime"
 	"net/http"
 	"strings"
 
@@ -53,8 +56,22 @@ func (s Server) withTarget(fn func(string) runner.Result) http.HandlerFunc {
 			writeJSON(w, http.StatusMethodNotAllowed, runner.Result{OK: false, Output: "method not allowed"})
 			return
 		}
+		if contentType := r.Header.Get("Content-Type"); contentType != "" {
+			mediaType, _, err := mime.ParseMediaType(contentType)
+			if err != nil || !strings.EqualFold(mediaType, "application/json") {
+				writeJSON(w, http.StatusUnsupportedMediaType, runner.Result{OK: false, Output: "content type must be application/json"})
+				return
+			}
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1024)
 		var req lgRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, runner.Result{OK: false, Output: "invalid json"})
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 			writeJSON(w, http.StatusBadRequest, runner.Result{OK: false, Output: "invalid json"})
 			return
 		}

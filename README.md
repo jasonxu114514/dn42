@@ -83,9 +83,9 @@ PING_PATH=/bin/ping
 /verify
 /peer
 /status [node]
-/ping <target> [node]
-/mtr <target> [node]
-/route <prefix|ip> [node]
+/ping <dn42-ip> [node]
+/mtr <dn42-ip> [node]
+/route <dn42-prefix|dn42-ip> [node]
 ```
 
 Admin actions are intentionally Web-only.

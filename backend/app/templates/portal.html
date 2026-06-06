@@ -17,6 +17,12 @@
     <label>WireGuard public key
       <input name="wg_public_key" required>
     </label>
+    <label>Our address{% if settings.local_asn %} (AS{{ settings.local_asn }}){% endif %}
+      <input name="local_link_address" value="{{ default_local_link_address }}" placeholder="fe80::1260" required>
+    </label>
+    <label>Your address (AS{{ user.primary_asn }})
+      <input name="peer_link_address" value="{{ default_peer_link_address }}" placeholder="fe80::99" required>
+    </label>
     <button type="submit">Request Peer</button>
   </form>
 </section>
@@ -24,7 +30,7 @@
 <section class="panel">
   <h2>Your Peer Requests</h2>
   <table>
-    <thead><tr><th>ID</th><th>ASN</th><th>Node</th><th>Status</th><th>Config</th></tr></thead>
+    <thead><tr><th>ID</th><th>ASN</th><th>Node</th><th>Status</th><th>Deploy</th><th>Config</th></tr></thead>
     <tbody>
       {% for peer in peers %}
         <tr>
@@ -32,6 +38,7 @@
           <td>{{ peer.asn }}</td>
           <td>{{ peer.node.name }}</td>
           <td>{{ peer.status }}</td>
+          <td>{{ peer.deploy_status }}</td>
           <td><a href="/portal/peers/{{ peer.id }}/config">view</a></td>
         </tr>
       {% endfor %}

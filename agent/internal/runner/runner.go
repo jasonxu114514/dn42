@@ -7,15 +7,22 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
 
 type Runner struct {
-	BirdcPath string
-	MtrPath   string
-	PingPath  string
-	Timeout   time.Duration
+	BirdcPath        string
+	MtrPath          string
+	PingPath         string
+	WgQuickPath      string
+	Timeout          time.Duration
+	WireGuardPeerDir string
+	BirdPeerDir      string
+	DeployReloadCmd  string
+	WireGuardKey     string
 }
 
 type Result struct {
@@ -23,17 +30,40 @@ type Result struct {
 	Output string `json:"output"`
 }
 
+type DeployRequest struct {
+	RequestID       int    `json:"request_id"`
+	ASN             string `json:"asn"`
+	Node            string `json:"node"`
+	ProtocolName    string `json:"protocol_name"`
+	WireGuardConfig string `json:"wireguard_config"`
+	BirdConfig      string `json:"bird_config"`
+}
+
+type DeployResult struct {
+	OK      bool     `json:"ok"`
+	Applied bool     `json:"applied"`
+	Output  string   `json:"output"`
+	Files   []string `json:"files"`
+}
+
 var (
 	dn42IPv4Net = parseCIDR("172.20.0.0/14")
 	dn42IPv6Net = parseCIDR("fd00::/8")
+	safeNameRE  = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]{0,79}$`)
 )
 
 func New() Runner {
+	deployDir := envOr("AGENT_DEPLOY_DIR", "/etc/dn42-autopeer")
 	return Runner{
-		BirdcPath: envOr("BIRDC_PATH", "birdc"),
-		MtrPath:   envOr("MTR_PATH", "mtr"),
-		PingPath:  envOr("PING_PATH", "ping"),
-		Timeout:   12 * time.Second,
+		BirdcPath:        envOr("BIRDC_PATH", "birdc"),
+		MtrPath:          envOr("MTR_PATH", "mtr"),
+		PingPath:         envOr("PING_PATH", "ping"),
+		WgQuickPath:      envOr("WG_QUICK_PATH", "wg-quick"),
+		Timeout:          12 * time.Second,
+		WireGuardPeerDir: envOr("WIREGUARD_PEER_DIR", filepath.Join(deployDir, "wireguard")),
+		BirdPeerDir:      envOr("BIRD_PEER_DIR", filepath.Join(deployDir, "bird")),
+		DeployReloadCmd:  strings.TrimSpace(os.Getenv("AGENT_DEPLOY_RELOAD_CMD")),
+		WireGuardKey:     strings.TrimSpace(os.Getenv("WIREGUARD_PRIVATE_KEY")),
 	}
 }
 
@@ -182,4 +212,145 @@ func (r Runner) Status() Result {
 		return bird
 	}
 	return Result{OK: false, Output: fmt.Sprintf("bird status failed:\n%s", bird.Output)}
+}
+
+func (r Runner) DeployPeer(req DeployRequest) DeployResult {
+	req.ASN = strings.TrimSpace(req.ASN)
+	req.Node = strings.TrimSpace(req.Node)
+	req.ProtocolName = strings.TrimSpace(req.ProtocolName)
+	req.WireGuardConfig = strings.TrimSpace(req.WireGuardConfig)
+	req.BirdConfig = strings.TrimSpace(req.BirdConfig)
+	if err := validateDeployRequest(req); err != nil {
+		return DeployResult{OK: false, Applied: false, Output: err.Error()}
+	}
+
+	files := []string{
+		filepath.Join(r.WireGuardPeerDir, req.ProtocolName+".conf"),
+		filepath.Join(r.BirdPeerDir, req.ProtocolName+".conf"),
+	}
+	wireGuardConfig, err := r.renderWireGuardConfig(req.WireGuardConfig)
+	if err != nil {
+		return DeployResult{OK: false, Output: err.Error(), Files: files}
+	}
+
+	if err := ensureChildPath(r.WireGuardPeerDir, files[0]); err != nil {
+		return DeployResult{OK: false, Output: err.Error()}
+	}
+	if err := ensureChildPath(r.BirdPeerDir, files[1]); err != nil {
+		return DeployResult{OK: false, Output: err.Error()}
+	}
+	if err := writeConfigFile(files[0], wireGuardConfig+"\n"); err != nil {
+		return DeployResult{OK: false, Output: err.Error(), Files: files}
+	}
+	if err := writeConfigFile(files[1], req.BirdConfig+"\n"); err != nil {
+		return DeployResult{OK: false, Output: err.Error(), Files: files}
+	}
+
+	output := "deployed peer config"
+	down := r.run(r.WgQuickPath, "down", files[0])
+	if down.Output != "" {
+		output = strings.TrimSpace(output + "\nwg-quick down:\n" + down.Output)
+	}
+	up := r.run(r.WgQuickPath, "up", files[0])
+	output = strings.TrimSpace(output + "\nwg-quick up:\n" + up.Output)
+	if !up.OK {
+		return DeployResult{OK: false, Applied: true, Output: output, Files: files}
+	}
+	if r.DeployReloadCmd != "" {
+		reload := r.run(strings.Fields(r.DeployReloadCmd)...)
+		output = strings.TrimSpace(output + "\n" + reload.Output)
+		if !reload.OK {
+			return DeployResult{OK: false, Applied: true, Output: output, Files: files}
+		}
+	}
+	return DeployResult{OK: true, Applied: true, Output: output, Files: files}
+}
+
+func (r Runner) renderWireGuardConfig(config string) (string, error) {
+	const placeholder = "{{WIREGUARD_PRIVATE_KEY}}"
+	if strings.Contains(config, placeholder) {
+		if r.WireGuardKey == "" {
+			return "", errors.New("WIREGUARD_PRIVATE_KEY is required for WireGuard deployment")
+		}
+		return strings.ReplaceAll(config, placeholder, r.WireGuardKey), nil
+	}
+	return config, nil
+}
+
+func validateDeployRequest(req DeployRequest) error {
+	if req.RequestID <= 0 {
+		return errors.New("request_id is required")
+	}
+	if req.ASN == "" || len(req.ASN) > 32 || hasUnsafeTargetChar(req.ASN) {
+		return errors.New("invalid asn")
+	}
+	if req.Node == "" || len(req.Node) > 64 || strings.ContainsAny(req.Node, "/\\") {
+		return errors.New("invalid node")
+	}
+	if !safeNameRE.MatchString(req.ProtocolName) {
+		return errors.New("invalid protocol_name")
+	}
+	if err := validateConfigSnippet("wireguard_config", req.WireGuardConfig); err != nil {
+		return err
+	}
+	if err := validateConfigSnippet("bird_config", req.BirdConfig); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateConfigSnippet(name string, value string) error {
+	if value == "" {
+		return fmt.Errorf("%s is required", name)
+	}
+	if len(value) > 16*1024 {
+		return fmt.Errorf("%s is too large", name)
+	}
+	if strings.ContainsRune(value, '\x00') {
+		return fmt.Errorf("%s contains invalid data", name)
+	}
+	return nil
+}
+
+func ensureChildPath(parent string, child string) error {
+	parentAbs, err := filepath.Abs(parent)
+	if err != nil {
+		return err
+	}
+	childAbs, err := filepath.Abs(child)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(parentAbs, childAbs)
+	if err != nil {
+		return err
+	}
+	if rel == "." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." {
+		return fmt.Errorf("refusing to write outside %s", parentAbs)
+	}
+	return nil
+}
+
+func writeConfigFile(path string, content string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".autopeer-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.WriteString(content); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0640); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }

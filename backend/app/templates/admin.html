@@ -4,7 +4,7 @@
   <h1>Admin</h1>
   <h2>Peer Requests</h2>
   <table>
-    <thead><tr><th>ID</th><th>ASN</th><th>Node</th><th>Endpoint</th><th>Status</th><th>Actions</th></tr></thead>
+    <thead><tr><th>ID</th><th>ASN</th><th>Node</th><th>Endpoint</th><th>Our Address{% if settings.local_asn %} (AS{{ settings.local_asn }}){% endif %}</th><th>User Address</th><th>Status</th><th>Deploy</th><th>Actions</th></tr></thead>
     <tbody>
       {% for peer in peers %}
         <tr>
@@ -12,9 +12,13 @@
           <td>{{ peer.asn }}</td>
           <td>{{ peer.node.name }}</td>
           <td>{{ peer.endpoint }}</td>
+          <td>{{ peer.local_link_address }}</td>
+          <td>AS{{ peer.asn }}: {{ peer.peer_link_address }}</td>
           <td>{{ peer.status }}</td>
+          <td title="{{ peer.deploy_output }}">{{ peer.deploy_status }}</td>
           <td class="actions">
             <form method="post" action="/admin/peers/{{ peer.id }}/approve"><button>Approve</button></form>
+            <form method="post" action="/admin/peers/{{ peer.id }}/deploy"><button>Deploy</button></form>
             <form method="post" action="/admin/peers/{{ peer.id }}/reject"><button>Reject</button></form>
             <a href="/admin/peers/{{ peer.id }}/config">config</a>
           </td>

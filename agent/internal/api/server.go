@@ -26,6 +26,7 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/lg/ping", s.auth(s.withTarget(s.Runner.Ping)))
 	mux.HandleFunc("/v1/lg/mtr", s.auth(s.withTarget(s.Runner.MTR)))
 	mux.HandleFunc("/v1/lg/route", s.auth(s.withTarget(s.Runner.Route)))
+	mux.HandleFunc("/v1/peers/deploy", s.auth(s.deployPeer))
 	return mux
 }
 
@@ -78,6 +79,38 @@ func (s Server) withTarget(fn func(string) runner.Result) http.HandlerFunc {
 		req.Target = strings.TrimSpace(req.Target)
 		writeJSON(w, http.StatusOK, fn(req.Target))
 	}
+}
+
+func (s Server) deployPeer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, runner.DeployResult{OK: false, Output: "method not allowed"})
+		return
+	}
+	if contentType := r.Header.Get("Content-Type"); contentType != "" {
+		mediaType, _, err := mime.ParseMediaType(contentType)
+		if err != nil || !strings.EqualFold(mediaType, "application/json") {
+			writeJSON(w, http.StatusUnsupportedMediaType, runner.DeployResult{OK: false, Output: "content type must be application/json"})
+			return
+		}
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+	var req runner.DeployRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, runner.DeployResult{OK: false, Output: "invalid json"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, runner.DeployResult{OK: false, Output: "invalid json"})
+		return
+	}
+	result := s.Runner.DeployPeer(req)
+	if !result.OK {
+		writeJSON(w, http.StatusBadRequest, result)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

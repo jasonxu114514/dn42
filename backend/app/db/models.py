@@ -87,8 +87,13 @@ class PeerRequest(Base):
     tunnel_type: Mapped[str] = mapped_column(String(32), default="wireguard")
     endpoint: Mapped[str] = mapped_column(String(255))
     wg_public_key: Mapped[str] = mapped_column(String(128))
+    local_link_address: Mapped[str] = mapped_column(String(128), default="")
+    peer_link_address: Mapped[str] = mapped_column(String(128), default="")
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
     admin_note: Mapped[str] = mapped_column(Text, default="")
+    deploy_status: Mapped[str] = mapped_column(String(32), default="not_deployed", index=True)
+    deploy_output: Mapped[str] = mapped_column(Text, default="")
+    deployed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     session_secret: str = "dev-session-secret"
     database_url: str = "sqlite:///./autopeer.db"
     admin_asns: str = ""
+    local_asn: str = ""
+    wireguard_private_key_placeholder: str = "{{WIREGUARD_PRIVATE_KEY}}"
+    auto_approve_peers: bool = False
+    auto_deploy_on_approval: bool = True
 
     kioubit_public_key_path: str = "app/keys/public_key.pem"
 

@@ -15,7 +15,7 @@ import (
 
 type Runner struct {
 	BirdcPath        string
-	MtrPath          string
+	TraceroutePath   string
 	PingPath         string
 	WgQuickPath      string
 	Timeout          time.Duration
@@ -61,7 +61,7 @@ func New() Runner {
 	deployDir := envOr("AGENT_DEPLOY_DIR", "/etc/dn42-autopeer")
 	return Runner{
 		BirdcPath:        envOr("BIRDC_PATH", "birdc"),
-		MtrPath:          envOr("MTR_PATH", "mtr"),
+		TraceroutePath:   envOr("TRACEROUTE_PATH", "traceroute"),
 		PingPath:         envOr("PING_PATH", "ping"),
 		WgQuickPath:      envOr("WG_QUICK_PATH", "wg-quick"),
 		Timeout:          12 * time.Second,
@@ -197,11 +197,16 @@ func (r Runner) Ping(target string) Result {
 	return r.run(r.PingPath, "-c", "4", "-W", "3", target)
 }
 
-func (r Runner) MTR(target string) Result {
+func (r Runner) Trace(target string) Result {
 	if err := ValidateDN42IPTarget(target); err != nil {
 		return Result{OK: false, Output: err.Error()}
 	}
-	return r.run(r.MtrPath, "-r", "-c", "5", "-w", target)
+	args := []string{r.TraceroutePath, "-n", "-q", "1", "-w", "2", "-m", "20"}
+	if ip := net.ParseIP(target); ip != nil && ip.To4() == nil {
+		args = append(args, "-6") // force IPv6 for fd00::/8 targets
+	}
+	args = append(args, target)
+	return r.run(args...)
 }
 
 func (r Runner) Route(target string) Result {
@@ -217,6 +222,16 @@ func (r Runner) Status() Result {
 		return bird
 	}
 	return Result{OK: false, Output: fmt.Sprintf("bird status failed:\n%s", bird.Output)}
+}
+
+// PeerStatus returns the detailed BIRD protocol state for a single peer, used by the bot's
+// per-peer /status command. protocolName is validated and passed as fixed argv, never a shell.
+func (r Runner) PeerStatus(protocolName string) Result {
+	protocolName = strings.TrimSpace(protocolName)
+	if !safeNameRE.MatchString(protocolName) {
+		return Result{OK: false, Output: "invalid protocol_name"}
+	}
+	return r.run(r.BirdcPath, "show", "protocols", "all", protocolName)
 }
 
 func (r Runner) DeployPeer(req DeployRequest) DeployResult {

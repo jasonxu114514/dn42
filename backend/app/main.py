@@ -14,19 +14,14 @@ from app.auth.session import current_user, login_user, logout_user
 from app.api.telegram import router as telegram_router
 from app.config import get_settings
 from app.db.init_db import create_schema, seed_defaults
-from app.db.models import Agent, LGQuery, PeerRequest, User, utcnow
+from app.db.models import Agent, LGQuery, PeerRequest, User
 from app.db.session import SessionLocal, get_db
 from app.lg.client import AgentClient
 from app.lg.ratelimit import SlidingWindowRateLimiter
 from app.lg.validation import validate_query_type, validate_target
 from app.peer.config import render_operator_config, render_user_config
-from app.peer.deploy import apply_deploy_result, deploy_peer, remove_peer
-from app.peer.validation import (
-    asn_link_local_address,
-    normalize_endpoint,
-    normalize_link_local_address,
-    normalize_wireguard_key,
-)
+from app.peer.service import create_peer, delete_peer, deploy_peer_request, update_peer
+from app.peer.validation import asn_link_local_address
 
 logger = logging.getLogger("dn42.autopeer")
 settings = get_settings()
@@ -188,37 +183,19 @@ def create_peer_request(
     agent = query_enabled_agents(db).filter(Agent.id == agent_id).one_or_none()
     if agent is None:
         raise HTTPException(status_code=400, detail="Unknown or disabled agent")
-    existing = (
-        db.query(PeerRequest)
-        .filter(PeerRequest.agent_id == agent.id, PeerRequest.asn == user.primary_asn)
-        .first()
-    )
-    if existing is not None:
-        raise HTTPException(
-            status_code=400,
-            detail="You already have a peer on this PoP. Edit or delete the existing one instead.",
-        )
     try:
-        endpoint = normalize_endpoint(endpoint)
-        wg_public_key = normalize_wireguard_key(wg_public_key)
-        local_link_address = normalize_link_local_address(local_link_address)
-        peer_link_address = normalize_link_local_address(peer_link_address)
+        create_peer(
+            db,
+            user=user,
+            agent=agent,
+            endpoint=endpoint,
+            wg_public_key=wg_public_key,
+            local_link_address=local_link_address,
+            peer_link_address=peer_link_address,
+            settings=settings,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    peer = PeerRequest(
-        user_id=user.id,
-        asn=user.primary_asn,
-        agent_id=agent.id,
-        endpoint=endpoint,
-        wg_public_key=wg_public_key,
-        local_link_address=local_link_address,
-        peer_link_address=peer_link_address,
-        status="approved",
-    )
-    peer.agent = agent
-    db.add(peer)
-    db.flush()
-    deploy_peer_request(peer)
     db.commit()
     return RedirectResponse("/portal", status_code=303)
 
@@ -371,39 +348,21 @@ def admin_update_peer(
     agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
     if agent is None:
         raise HTTPException(status_code=400, detail="Unknown agent")
-    if status not in {"approved", "disabled"}:
-        raise HTTPException(status_code=400, detail="Unsupported peer status")
-    duplicate = (
-        db.query(PeerRequest)
-        .filter(
-            PeerRequest.agent_id == agent.id,
-            PeerRequest.asn == peer.asn,
-            PeerRequest.id != peer.id,
-        )
-        .first()
-    )
-    if duplicate is not None:
-        raise HTTPException(
-            status_code=400,
-            detail=f"AS{peer.asn} already has another peer (#{duplicate.id}) on this PoP.",
-        )
     try:
-        endpoint = normalize_endpoint(endpoint)
-        wg_public_key = normalize_wireguard_key(wg_public_key)
-        local_link_address = normalize_link_local_address(local_link_address)
-        peer_link_address = normalize_link_local_address(peer_link_address)
+        update_peer(
+            db,
+            peer=peer,
+            agent=agent,
+            endpoint=endpoint,
+            wg_public_key=wg_public_key,
+            local_link_address=local_link_address,
+            peer_link_address=peer_link_address,
+            status=status,
+            settings=settings,
+            redeploy=False,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    peer.agent_id = agent.id
-    peer.agent = agent
-    peer.endpoint = endpoint
-    peer.wg_public_key = wg_public_key
-    peer.local_link_address = local_link_address
-    peer.peer_link_address = peer_link_address
-    peer.status = status
-    peer.updated_at = utcnow()
-    if status == "disabled":
-        teardown_peer_request(peer)
     db.commit()
     return RedirectResponse("/admin", status_code=303)
 
@@ -422,7 +381,7 @@ def admin_redeploy_peer(
         raise HTTPException(status_code=404, detail="Peer not found")
     if peer.status != "approved":
         raise HTTPException(status_code=400, detail="Only approved peers can be deployed")
-    deploy_peer_request(peer)
+    deploy_peer_request(peer, settings)
     db.commit()
     return RedirectResponse("/admin", status_code=303)
 
@@ -439,16 +398,7 @@ def admin_delete_peer(
     peer = db.query(PeerRequest).filter(PeerRequest.id == peer_id).one_or_none()
     if peer is None:
         raise HTTPException(status_code=404, detail="Peer not found")
-    try:
-        remove_peer(peer, peer.agent)
-    except Exception as exc:
-        logger.warning(
-            "Could not tear down peer #%s on agent %s before delete: %s",
-            peer.id,
-            peer.agent.name,
-            exc,
-        )
-    db.delete(peer)
+    delete_peer(db, peer=peer)
     db.commit()
     return RedirectResponse("/admin", status_code=303)
 
@@ -470,35 +420,6 @@ def admin_peer_config(peer_id: int, request: Request, db: Session = Depends(get_
         },
         user=user,
     )
-
-
-def deploy_peer_request(peer: PeerRequest) -> None:
-    peer.deploy_status = "deploying"
-    peer.deploy_output = ""
-    peer.updated_at = utcnow()
-    try:
-        result = deploy_peer(peer, peer.agent, settings)
-        apply_deploy_result(peer, result)
-    except Exception as exc:
-        peer.deploy_status = "failed"
-        peer.deploy_output = str(exc)
-        peer.deployed_at = None
-        peer.updated_at = utcnow()
-
-
-def teardown_peer_request(peer: PeerRequest) -> None:
-    peer.updated_at = utcnow()
-    try:
-        result = remove_peer(peer, peer.agent)
-        if bool(result.get("ok", False)):
-            peer.deploy_status = "removed"
-            peer.deployed_at = None
-        else:
-            peer.deploy_status = "failed"
-        peer.deploy_output = str(result.get("output", result))
-    except Exception as exc:
-        peer.deploy_status = "failed"
-        peer.deploy_output = f"teardown failed: {exc}"
 
 
 @app.post("/lg", response_class=HTMLResponse)

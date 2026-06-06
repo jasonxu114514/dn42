@@ -2,7 +2,7 @@ import ipaddress
 import re
 
 
-ALLOWED_QUERY_TYPES = {"ping", "mtr", "route", "status"}
+ALLOWED_QUERY_TYPES = {"ping", "trace", "mtr", "route", "status"}
 DN42_NETWORKS = (
     ipaddress.ip_network("172.20.0.0/14"),
     ipaddress.ip_network("fd00::/8"),

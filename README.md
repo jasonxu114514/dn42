@@ -8,7 +8,7 @@ This first version includes:
 - Kioubit.dn42 authentication for ASN ownership
 - Telegram Mini App verification flow
 - Telegram bot commands for peer status and LG queries
-- Go agent for `ping`, `mtr`, `birdc show route`, `birdc show protocols`, and peer config deployment
+- Go agent for `ping`, `traceroute`, `birdc show route`, `birdc show protocols`, and peer config deployment
 - SQLite by default for local testing
 
 ## Layout
@@ -145,7 +145,7 @@ Optional paths:
 
 ```text
 BIRDC_PATH=/usr/sbin/birdc
-MTR_PATH=/usr/bin/mtr
+TRACEROUTE_PATH=/usr/bin/traceroute
 PING_PATH=/bin/ping
 ```
 
@@ -176,10 +176,20 @@ directory, for example `include "/etc/dn42-autopeer/bird/*";`.
 ## Telegram Commands
 
 ```text
-/verify
-/peer
-/status [agent]
+/login                 link your dn42 ASN (Kioubit)
+/peer                  list your peers
+/status                detailed BGP status of your own peers
+/create                create a peer (guided wizard)
+/edit                  edit one of your peers (guided wizard)
+/delete                delete one of your peers (guided wizard)
 /ping <dn42-ip> [agent]
-/mtr <dn42-ip> [agent]
+/trace <dn42-ip> [agent]
 /route <dn42-prefix|dn42-ip> [agent]
+/cancel                abort the current guided action
 ```
+
+`/create`, `/edit`, and `/delete` are step-by-step wizards: the bot asks for the PoP, WireGuard
+endpoint, and public key one at a time. Link-local addresses are auto-derived from the ASNs (the
+same defaults the web portal prefills); use the web portal if you need custom addresses. `/trace`
+runs `traceroute` (`/mtr` is kept as an alias). `/status` reports each of your own peers'
+`birdc show protocols all` detail (Established / Idle / Connection reset, route counts).

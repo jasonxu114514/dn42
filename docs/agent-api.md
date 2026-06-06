@@ -26,15 +26,17 @@ Runs fixed argv:
 ping -c 4 -W 3 <target>
 ```
 
-## `POST /v1/lg/mtr`
+## `POST /v1/lg/trace`
 
 Target must be a single IP inside DN42 address space (`172.20.0.0/14` or `fd00::/8`).
 
-Runs fixed argv:
+Runs fixed argv (`-6` is added for IPv6 targets):
 
 ```text
-mtr -r -c 5 -w <target>
+traceroute -n -q 1 -w 2 -m 20 <target>
 ```
+
+`POST /v1/lg/mtr` is kept as a back-compat alias that runs the same traceroute.
 
 ## `POST /v1/lg/route`
 
@@ -83,6 +85,27 @@ Tears a peer down: runs `wg-quick down` on its WireGuard file (if present), dele
 and BIRD snippet files for `protocol_name`, and runs `AGENT_DEPLOY_RELOAD_CMD` if set. Used by the
 backend when a peer is disabled or deleted so revoked peers do not keep an active tunnel or BGP
 session. `protocol_name` is validated and resolved only inside the agent's peer directories.
+
+## `POST /v1/peers/status`
+
+Body:
+
+```json
+{
+  "protocol_name": "dn42p12"
+}
+```
+
+Runs fixed argv:
+
+```text
+birdc show protocols all <protocol_name>
+```
+
+Returns the detailed BIRD state for a single peer (BGP state, last error such as `Connection
+reset`, route counts). Used by the Telegram `/status` command, which queries each of the caller's
+own peers. `protocol_name` is validated against the same safe-name pattern as deploy/remove, and
+the call is bounded by `AGENT_MAX_CONCURRENCY` like the other looking-glass reads.
 
 ## Concurrency
 

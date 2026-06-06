@@ -32,14 +32,20 @@ type lgRequest struct {
 	Target string `json:"target"`
 }
 
+type peerStatusRequest struct {
+	ProtocolName string `json:"protocol_name"`
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/status", s.auth(s.limit(s.status)))
 	mux.HandleFunc("/v1/lg/ping", s.auth(s.limit(s.withTarget(s.Runner.Ping))))
-	mux.HandleFunc("/v1/lg/mtr", s.auth(s.limit(s.withTarget(s.Runner.MTR))))
+	mux.HandleFunc("/v1/lg/trace", s.auth(s.limit(s.withTarget(s.Runner.Trace))))
+	mux.HandleFunc("/v1/lg/mtr", s.auth(s.limit(s.withTarget(s.Runner.Trace)))) // back-compat alias for trace
 	mux.HandleFunc("/v1/lg/route", s.auth(s.limit(s.withTarget(s.Runner.Route))))
 	mux.HandleFunc("/v1/peers/deploy", s.auth(s.deployPeer))
 	mux.HandleFunc("/v1/peers/remove", s.auth(s.removePeer))
+	mux.HandleFunc("/v1/peers/status", s.auth(s.limit(s.peerStatus)))
 	return mux
 }
 
@@ -142,6 +148,33 @@ func (s *Server) deployPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) peerStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, runner.Result{OK: false, Output: "method not allowed"})
+		return
+	}
+	if contentType := r.Header.Get("Content-Type"); contentType != "" {
+		mediaType, _, err := mime.ParseMediaType(contentType)
+		if err != nil || !strings.EqualFold(mediaType, "application/json") {
+			writeJSON(w, http.StatusUnsupportedMediaType, runner.Result{OK: false, Output: "content type must be application/json"})
+			return
+		}
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	var req peerStatusRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, runner.Result{OK: false, Output: "invalid json"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, runner.Result{OK: false, Output: "invalid json"})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.Runner.PeerStatus(req.ProtocolName))
 }
 
 func (s *Server) removePeer(w http.ResponseWriter, r *http.Request) {

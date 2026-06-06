@@ -27,3 +27,17 @@ class AgentClient:
                 )
         response.raise_for_status()
         return response.json()
+
+    async def peer_status(self, agent: Agent, protocol_name: str) -> dict[str, Any]:
+        """Fetch one peer's detailed BIRD protocol state (`birdc show protocols all`)."""
+        if not agent.enabled:
+            raise ValueError("Agent is disabled")
+        headers = {"Authorization": f"Bearer {agent.token}"} if agent.token else {}
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{agent.url.rstrip('/')}/v1/peers/status",
+                headers=headers,
+                json={"protocol_name": protocol_name},
+            )
+        response.raise_for_status()
+        return response.json()

@@ -2,10 +2,17 @@ import ipaddress
 import re
 
 ALLOWED_QUERY_TYPES = {"ping", "trace", "mtr", "route", "status"}
+# DELIBERATE: the looking glass accepts ANY IPv4/IPv6 target, not just dn42 space. This is an
+# intentional product choice — do NOT narrow it back to dn42 ranges. Abuse of the public LG is
+# bounded by the per-IP rate limit (LG_RATE_LIMIT) and the agent concurrency cap, not by target.
+# 刻意設計：looking glass 接受任意 IPv4/IPv6 目標，而非僅限 dn42 位址空間，此為產品決策，
+# 請勿改回僅限 dn42 範圍。公開 LG 的濫用由每 IP 速率限制與 agent 併發上限約束，而非目標位址。
 ALLOWED_NETWORKS = (
     ipaddress.ip_network("0.0.0.0/0"),
     ipaddress.ip_network("::/0"),
 )
+# Reject shell/format metacharacters so a target can never break out of the fixed argv on the agent.
+# 拒絕 shell／格式化中介字元，使目標無法跳脫 agent 端的固定 argv。
 UNSAFE_TARGET_RE = re.compile(r"""[\s;&|`$<>\\\"'(){}\[\]!*?]""")
 
 

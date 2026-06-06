@@ -1,3 +1,9 @@
+"""Verify Kioubit dn42 auth tokens: an ECDSA signature over a base64-JSON ``params`` blob.
+
+驗證 Kioubit dn42 認證權杖：對 base64-JSON 的 ``params`` 內容做 ECDSA 簽章驗證。後端只信任此處
+驗證過的資料——先核對簽章、時間戳（防重放）與 domain，再回傳解析後的 ASN／mnt 等欄位。
+"""
+
 import base64
 import json
 import time
@@ -55,6 +61,11 @@ class KioubitVerifier:
         except (ValueError, json.JSONDecodeError) as exc:
             raise KioubitAuthError("Invalid Kioubit params") from exc
 
+        # Replay window: reject tokens whose timestamp is more than max_age_seconds from now
+        # (in either direction, to tolerate small clock skew). Domain must match exactly so a
+        # token minted for another site cannot be replayed here.
+        # 重放窗口：拒絕時間戳與現在相差超過 max_age_seconds 的權杖（雙向，以容忍時鐘偏差）；
+        # domain 必須完全相符，避免他站簽發的權杖被重放至此。
         now = time.time()
         auth_time = float(data.get("time", 0))
         if abs(now - auth_time) > self.max_age_seconds:

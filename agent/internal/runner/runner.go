@@ -51,6 +51,11 @@ type RemoveRequest struct {
 	ProtocolName string `json:"protocol_name"`
 }
 
+// allowedIPv4Net/allowedIPv6Net deliberately permit ANY IPv4/IPv6 target (0.0.0.0/0, ::/0), not
+// just dn42 space — an intentional product choice; do NOT narrow it back. safeNameRE bounds the
+// protocol name that becomes a file name and a birdc argv.
+// allowedIPv4Net／allowedIPv6Net 刻意允許任意 IPv4/IPv6 目標（0.0.0.0/0、::/0），而非僅限 dn42，
+// 此為刻意決策，請勿改回限制範圍。safeNameRE 約束會成為檔名與 birdc 參數的 protocol name。
 var (
 	allowedIPv4Net = parseCIDR("0.0.0.0/0")
 	allowedIPv6Net = parseCIDR("::/0")
@@ -129,6 +134,11 @@ func ValidateRouteTarget(target string) error {
 	return nil
 }
 
+// hasUnsafeTargetChar rejects a target that could break out of the agent's fixed argv: a leading
+// "-" (so it can't be read as a command option), control/non-ASCII bytes, and shell/format
+// metacharacters. Targets always go through exec argv, never a shell, so this is defence in depth.
+// hasUnsafeTargetChar 拒絕可能跳脫 agent 固定 argv 的目標：開頭的 "-"（避免被當成選項）、控制／
+// 非 ASCII 位元組，以及 shell／格式化中介字元。目標一律經由 exec argv 而非 shell，此為縱深防禦。
 func hasUnsafeTargetChar(target string) bool {
 	if strings.HasPrefix(target, "-") {
 		return true
@@ -156,6 +166,11 @@ func containsPrefix(parent *net.IPNet, child *net.IPNet) bool {
 	return parent.Contains(child.IP) && parent.Contains(lastIP(child))
 }
 
+// lastIP returns the last address in a prefix (e.g. the broadcast address of an IPv4 subnet) by
+// setting every host bit: last = network.IP | ^mask. Used to check that a whole prefix lies within
+// an allowed range — both its first and last address must be contained.
+// lastIP 回傳前綴中的最後一個位址（例如 IPv4 子網的廣播位址），作法是將所有主機位元設為 1：
+// last = network.IP | ^mask。用於檢查整個前綴是否落在允許範圍內（首、尾位址都需被包含）。
 func lastIP(network *net.IPNet) net.IP {
 	ip := network.IP
 	if ip4 := ip.To4(); ip4 != nil {
@@ -374,6 +389,11 @@ func validateConfigSnippet(name string, value string) error {
 	return nil
 }
 
+// ensureChildPath verifies child resolves strictly inside parent, guarding against path traversal
+// before the agent writes a peer config. The relative path must not be "." (the dir itself) nor
+// start with ".." (an escape), so e.g. a crafted protocol_name cannot redirect the write elsewhere.
+// ensureChildPath 確認 child 解析後嚴格位於 parent 之內，於 agent 寫入對等設定前防止路徑穿越：
+// 相對路徑不得為 "."（目錄本身）或以 ".." 開頭（逃逸），使惡意 protocol_name 無法改寫到他處。
 func ensureChildPath(parent string, child string) error {
 	parentAbs, err := filepath.Abs(parent)
 	if err != nil {

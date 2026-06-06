@@ -87,6 +87,10 @@ class PeerStatusRequest(BaseModel):
 
 
 def require_bot_secret(x_backend_secret: str = Header("")) -> None:
+    """Guard the bot-only API: the shared secret must match in constant time.
+
+    保護僅供 bot 使用的 API：共享密鑰需以定時比較核對，避免從回應時間逐位元推測密鑰。
+    """
     settings = get_settings()
     if not secrets.compare_digest(x_backend_secret, settings.telegram_backend_secret):
         raise HTTPException(status_code=401, detail="Invalid bot secret")

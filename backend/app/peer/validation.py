@@ -1,3 +1,10 @@
+"""Validation/normalisation of user-supplied peer fields, plus dn42 ASN-derived defaults.
+
+驗證並正規化使用者輸入的對等欄位（端點、WireGuard 金鑰、link-local 位址），並從 dn42 ASN
+推導預設值（WireGuard 監聽埠與 fe80:: link-local 位址）。這些值會寫入路由器的 WireGuard/BIRD
+設定，因此每個輸入都需嚴格檢查。
+"""
+
 import re
 from ipaddress import IPv6Address, ip_address, ip_interface
 
@@ -55,6 +62,10 @@ def normalize_wireguard_key(value: str) -> str:
 
 
 def asn_link_local_address(asn: str) -> str:
+    """Derive the peer's IPv6 link-local address from its ASN: ``fe80::<suffix>``.
+
+    依 ASN 推導對等端的 IPv6 link-local 位址（fe80::<後綴>），與 web portal 預填的預設一致。
+    """
     suffix = normalize_dn42_asn_suffix(asn)
     address = f"fe80::{suffix}"
     try:
@@ -78,6 +89,11 @@ def normalize_link_local_address(value: str) -> str:
 
 
 def wireguard_listen_port(asn: str) -> int:
+    """Derive the WireGuard listen port from the ASN's last 5 digits (4242420090 -> 20090).
+
+    取 ASN 後 5 位數字作為 WireGuard 監聽埠（例如 4242420090 → 20090）；因為每個 PoP 對每個
+    ASN 至多一個對等端，所以各對等端的埠不會衝突。
+    """
     value = normalize_asn_number(asn)
     port = int(value[-5:])
     if port < 1 or port > 65535:
@@ -95,13 +111,23 @@ def normalize_asn_number(asn: str) -> str:
 
 
 def normalize_dn42_asn_suffix(asn: str) -> str:
+    """Reduce an ASN to the short hex suffix used in fe80::<suffix> link-local addresses.
+
+    將 ASN 縮減為 link-local 位址 fe80::<後綴> 所用的短十六進位後綴。
+    """
     value = normalize_asn_number(asn)
+    # dn42 ASNs are 4242420000+: drop the shared 424242 prefix (4242420099 -> "0099"),
+    # otherwise keep the last 4 digits; ASNs shorter than 4 digits are used as-is.
+    # dn42 ASN 多為 4242420000+：去掉共用的 424242 前綴（4242420099 → "0099"），否則取後 4 位；
+    # 不足 4 位的 ASN 原樣保留。
     if len(value) < 4:
         suffix = value
     elif value.startswith("424242"):
         suffix = value[6:]
     else:
         suffix = value[-4:]
+    # Strip leading zeros for a compact address (fe80::99, not fe80::0099); keep one "0".
+    # 去除前導零讓位址精簡（fe80::99 而非 fe80::0099），但全零時保留一個 "0"。
     suffix = suffix.lstrip("0") or "0"
     if not all(ch in "0123456789abcdefABCDEF" for ch in suffix):
         raise ValueError("ASN suffix must be valid hexadecimal for link-local generation")

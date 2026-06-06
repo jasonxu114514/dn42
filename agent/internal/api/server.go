@@ -56,6 +56,7 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 			got := r.Header.Get("Authorization")
 			// Constant-time compare so a caller cannot recover the token byte-by-byte
 			// from response timing.
+			// 以定時比較核對，避免呼叫端從回應時間逐位元推測 token。
 			if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
 				writeJSON(w, http.StatusUnauthorized, runner.Result{OK: false, Output: "unauthorized"})
 				return

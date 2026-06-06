@@ -9,8 +9,8 @@
    - `token=<challenge token>`
 4. Kioubit redirects back with `params` and `signature`.
 5. Backend verifies:
-   - ECDSA P-521 signature over the original `params` string
-   - decoded JSON `time`
+   - ECDSA signature (SHA-512) over the original `params` string, using Kioubit's EC public key
+   - decoded JSON `time` (short replay window)
    - decoded JSON `domain`
    - decoded JSON `user_token`
 6. Backend creates or updates the user and starts a session.

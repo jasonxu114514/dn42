@@ -1,179 +1,176 @@
-# dn42 Autopeer MVP
+# dn42 Autopeer
 
-Python control plane + Go agent for a dn42 autopeer and looking glass service.
+**English** · [繁體中文](README.zh-TW.md)
 
-This first version includes:
+A self-service autopeer and looking-glass service for [dn42](https://dn42.dev): a Python control
+plane that authenticates ASN owners and pushes WireGuard + BIRD2 configs to your routers, and a Go
+agent that applies them. Peers can be created from a web portal or a Telegram bot.
 
-- WebUI with public looking glass, user portal, and admin panel
-- Kioubit.dn42 authentication for ASN ownership
-- Telegram Mini App verification flow
-- Telegram bot commands for peer status and LG queries
-- Go agent for `ping`, `traceroute`, `birdc show route`, `birdc show protocols`, and peer config deployment
-- SQLite by default for local testing
+- **WebUI** — public looking glass, authenticated user portal, admin panel
+- **Kioubit.dn42 auth** — proves ASN ownership before any config is generated
+- **Telegram** — Mini App verification plus a guided bot for peer create/edit/delete and status
+- **Go agent** — runs `ping` / `traceroute` / `birdc` and deploys per-peer WireGuard + BIRD configs
+- **SQLite by default** — zero-setup local testing; point `DATABASE_URL` elsewhere for production
 
-## Layout
+> **Heads up:** the agent runs on your router **as root** (it calls `wg-quick` and writes BIRD
+> snippets). Treat every value that can reach a router config as security-sensitive, and read the
+> [Security model](#security-model) before exposing the service publicly.
+
+## Contents
+
+- [Architecture](#architecture)
+- [How peering works](#how-peering-works)
+- [Quickstart](#quickstart)
+- [Configuration reference](#configuration-reference)
+- [Looking glass](#looking-glass)
+- [Telegram](#telegram)
+- [Agent](#agent)
+- [Security model](#security-model)
+- [Troubleshooting](#troubleshooting)
+- [Layout](#layout)
+
+## Architecture
 
 ```text
-backend/      Python FastAPI control plane, WebUI, Telegram bot
-agent/        Go agent for router-side commands
-deploy/       systemd examples
-docs/         notes and API flow
+                 Kioubit.dn42 (ASN ownership, ECDSA-signed tokens)
+                        │ verify
+   Browser / Telegram ──┤
+            │           ▼
+            │     ┌───────────────┐   Bearer-token HTTP    ┌──────────────────┐
+            └────▶│   Backend     │ ─────────────────────▶ │   Agent (root)   │
+   Telegram bot ─▶│  (FastAPI)    │   /v1/lg/* /v1/peers/* │  per router/PoP  │
+   X-Backend-Secret   │  SQLite    │ ◀───────────────────── │  wg-quick + bird │
+                  └───────────────┘     JSON results        └──────────────────┘
 ```
 
-## Backend
+- **Backend** (`backend/`, FastAPI) — serves the WebUI, the bot-only REST API, and the control
+  plane. It talks **directly** to agents over HTTP using a per-agent bearer token it generates.
+- **Agent** (`agent/`, Go) — one per router ("PoP"). Executes fixed-argv looking-glass commands and
+  writes/reloads per-peer WireGuard and BIRD config. Looking-glass concurrency is capped so public
+  queries can't exhaust the router.
+- **Telegram bot** (`backend/app/bot/`, aiogram) — a separate process that calls the backend over
+  HTTP, authenticated with a shared `TELEGRAM_BACKEND_SECRET`.
 
-On a Linux server:
+## How peering works
+
+1. **Authenticate** your ASN with Kioubit (web `/login` or the Telegram `/login` Mini App). The
+   backend only ever trusts Kioubit-signed data.
+2. **Create a peer** — in the portal or via the `/create` bot wizard — choosing a PoP (agent), your
+   WireGuard endpoint (`host:port`), and your WireGuard public key. The link-local BGP addresses
+   default to `fe80::<asn-suffix>` (e.g. `4242420099` → `fe80::99`); use the web portal for custom
+   addresses.
+3. The backend **validates** every field, enforces **one peer per ASN per PoP**, **auto-approves**
+   the peer, renders the WireGuard + BIRD2 snippets, and `POST`s them to the agent's
+   `/v1/peers/deploy`.
+4. The agent writes `dn42p<peer-id>.conf` for WireGuard and BIRD, runs `wg-quick down/up`, and
+   reloads BIRD if configured.
+5. **Deleting or disabling** a peer tears it down on the router (`/v1/peers/remove`: `wg-quick down`
+   plus snippet removal), so revoked peers stop forwarding immediately.
+
+The WireGuard listen port is derived from the remote ASN's last five digits (`4242420090` →
+`20090`); the endpoint a peer dials is the agent host plus that port.
+
+## Quickstart
+
+### Backend (Linux)
 
 ```sh
-cd ~/dn42/backend
-cp .env.example .env
+cd backend
+cp .env.example .env            # then edit: set DOMAIN, LOCAL_ASN, and strong secrets
 python3.11 -m venv .venv
 . .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e .
 cd ..
-python3 start.py
+python3 start.py                # starts backend + Telegram bot
 ```
 
-If `.venv` already exists but `uvicorn` or `httpx` is missing, reinstall the backend dependencies:
+`start.py` launches both the FastAPI backend and the Telegram bot and streams their logs. Useful
+flags:
 
-```sh
-cd ~/dn42/backend
-. .venv/bin/activate
-python -m pip install -e .
-```
+| Flag | Effect |
+| --- | --- |
+| `--allow-http` | Start even when `DOMAIN` is not HTTPS (sets `ALLOW_INSECURE_DEFAULTS=1`). Local testing only — Telegram Mini App verification will not work. |
+| `--backend-only` | Start only the FastAPI backend. |
+| `--bot-only` | Start only the Telegram bot. |
+| `--host` / `--port` | Override the backend bind address without editing `.env`. |
 
-On Windows:
+Place Kioubit's public key at `backend/app/keys/public_key.pem`.
+
+### Backend (Windows)
 
 ```powershell
 cd backend
 Copy-Item .env.example .env
 python -m venv .venv
 .\.venv\Scripts\pip install -e .
-.\.venv\Scripts\uvicorn app.main:app --reload
-```
-
-Place Kioubit's `public_key.pem` at:
-
-```text
-backend/app/keys/public_key.pem
-```
-
-Important `.env` values:
-
-```text
-HOST=127.0.0.1
-PORT=8000
-DOMAIN=your-service.example
-SESSION_SECRET=<random secret>
-LOCAL_ASN=424242xxxx
-TELEGRAM_BOT_TOKEN=<from BotFather>
-TELEGRAM_BACKEND_SECRET=<random shared secret>
-TELEGRAM_BACKEND_URL=http://127.0.0.1:8000
-DEFAULT_AGENT_URL=http://127.0.0.1:8080
-```
-
-`LOCAL_ASN` is both the local BGP ASN and the ASN that receives admin access after Kioubit
-authentication. `TELEGRAM_BACKEND_SECRET` is a random shared secret used only between the Telegram
-bot and backend; set the same value for both processes. You can generate one with
-`python -c "import secrets; print(secrets.token_urlsafe(32))"`.
-The backend refuses to start while `SESSION_SECRET` or `TELEGRAM_BACKEND_SECRET` is left at a
-placeholder value (such as `change-me` or `dev-...`). Set strong random values, or pass
-`--allow-http` to `start.py` (which sets `ALLOW_INSECURE_DEFAULTS=1`) for local testing only.
-`TELEGRAM_BACKEND_URL` is the internal URL the bot uses to call the FastAPI backend. Keep it as
-`http://127.0.0.1:8000` when the bot and backend run on the same host, even when `DOMAIN` is a
-public HTTPS URL.
-
-Local and remote peer addresses are requested in the portal and default to link-local addresses
-generated from ASNs: `4242420099` becomes `fe80::99`, and `4242421260` becomes `fe80::1260`.
-Peer creation is fully automatic: the backend immediately approves the peer, calls the selected
-agent, and posts generated WireGuard and BIRD configs to `/v1/peers/deploy`.
-
-Each PoP (agent) accepts at most one peer per ASN; if you already have a peer on an agent, edit or
-delete the existing one instead of creating a second. Deleting or disabling a peer tears it down on
-the router (the agent runs `wg-quick down` and removes the WireGuard and BIRD snippets) so revoked
-peers stop forwarding immediately. User-supplied endpoint and WireGuard public key are strictly
-validated before they are written into any router config.
-
-The control plane talks directly to agents: `Backend -> Agent`. Create each controlled router as
-an Agent in the admin panel with its display name, location, and Agent API URL. The backend
-generates the agent bearer token automatically. The admin panel also shows the configured control
-plane URL (`DOMAIN`) as read-only reference. Looking glass, peer creation, and deployment only
-use enabled agents.
-
-`HOST` and `PORT` control where Uvicorn listens. `DOMAIN` is the public domain used in generated
-links and Kioubit verification. Use `HOST=0.0.0.0` only when the backend should accept direct
-connections from outside the server; keep `HOST=127.0.0.1` when running behind nginx or another
-reverse proxy. If `DOMAIN` has no scheme, the public URL is treated as `https://<DOMAIN>`.
-
-Run the Telegram bot:
-
-```powershell
-cd backend
-.\.venv\Scripts\python -m app.bot.main
-```
-
-Or start the backend and Telegram bot together from the repository root:
-
-```powershell
+cd ..
 python start.py
 ```
 
-You can also override the backend bind address without editing `.env`:
-
-```powershell
-python start.py --host 0.0.0.0 --port 8000
-```
-
-Telegram Mini App verification requires `DOMAIN` to resolve to a public `https://` URL. For local backend
-testing without Telegram verification, run `python start.py --allow-http`.
-
-## Agent
-
-```powershell
-cd agent
-go build ./cmd/agent
-```
-
-On a Linux router:
+### Agent (on each router)
 
 ```sh
-AGENT_LISTEN=:8080 AGENT_TOKEN=change-me ./agent
+cd agent
+go build ./cmd/agent
+AGENT_LISTEN=:8080 AGENT_TOKEN=<token-from-admin-panel> ./agent
 ```
 
-Optional paths:
+On first start the backend seeds one agent named **`local`** pointing at `DEFAULT_AGENT_URL`. Add
+more routers in the admin panel (name, location, Agent API URL); the backend generates each agent's
+bearer token for you. Set that token as `AGENT_TOKEN` on the corresponding router.
 
-```text
-BIRDC_PATH=/usr/sbin/birdc
-TRACEROUTE_PATH=/usr/bin/traceroute
-PING_PATH=/bin/ping
-```
+## Configuration reference
 
-The agent writes generated snippets on the router:
+### Backend (`backend/.env`)
 
-```text
-AGENT_DEPLOY_DIR=/etc/dn42-autopeer
-WIREGUARD_PEER_DIR=/etc/dn42-autopeer/wireguard
-BIRD_PEER_DIR=/etc/dn42-autopeer/bird
-WIREGUARD_PRIVATE_KEY=<router wireguard private key>
-WG_QUICK_PATH=/usr/bin/wg-quick
-AGENT_DEPLOY_RELOAD_CMD=systemctl reload bird
-AGENT_MAX_CONCURRENCY=4
-```
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `APP_NAME` | `dn42 Autopeer` | Display name in the WebUI. |
+| `HOST` / `PORT` | `127.0.0.1` / `8000` | Uvicorn bind address. Use `0.0.0.0` only for direct external access; keep `127.0.0.1` behind a reverse proxy. |
+| `DOMAIN` | `127.0.0.1:8000` | Public domain for generated links and Kioubit verification. No scheme ⇒ treated as `https://`. |
+| `SESSION_SECRET` | `dev-session-secret` | Web session signing key. **Must** be changed (see below). |
+| `DATABASE_URL` | `sqlite:///./autopeer.db` | SQLAlchemy URL. |
+| `LOCAL_ASN` | _(empty)_ | Your local BGP ASN; also the ASN granted admin after Kioubit login. |
+| `KIOUBIT_PUBLIC_KEY_PATH` | `app/keys/public_key.pem` | Kioubit signing public key (PEM). |
+| `TELEGRAM_BOT_TOKEN` | _(empty)_ | BotFather token; required for the bot. |
+| `TELEGRAM_BACKEND_SECRET` | `dev-telegram-secret` | Shared secret between bot and backend. **Must** be changed. |
+| `TELEGRAM_BACKEND_URL` | _(falls back to `DOMAIN`)_ | Internal URL the bot uses to reach the backend — keep `http://127.0.0.1:8000` when co-located. |
+| `DEFAULT_AGENT_URL` | `http://127.0.0.1:8080` | URL of the auto-seeded `local` agent. |
+| `ALLOW_INSECURE_DEFAULTS` | `0` | `1` tolerates placeholder secrets (local testing). |
+| `LG_RATE_LIMIT` | `20` | Max looking-glass queries per window per client IP (`0` disables). |
+| `LG_RATE_WINDOW_SECONDS` | `60` | Rate-limit window length. |
+| `FORWARDED_IP_HEADER` | _(empty)_ | e.g. `X-Forwarded-For`, **only** behind a trusted proxy that sets it; otherwise all clients share one bucket. |
 
-`AGENT_MAX_CONCURRENCY` bounds how many looking glass commands run at once; extra requests get
-`429` instead of queueing (set `0` to disable the limit).
+Generate strong secrets with `python -c "import secrets; print(secrets.token_urlsafe(32))"`. The
+backend **refuses to start** while `SESSION_SECRET` or `TELEGRAM_BACKEND_SECRET` is a placeholder
+(`change-me`, `dev-…`, empty) unless `ALLOW_INSECURE_DEFAULTS=1` (or `start.py --allow-http`).
 
-WireGuard configs are complete `wg-quick` configs. The agent writes `dn42p<peer-id>.conf`, runs
-`wg-quick down <file>` and `wg-quick up <file>`, then reloads BIRD if configured. The WireGuard
-listen port is derived from the remote ASN's last five digits, so `4242420090` listens on
-`20090`.
+### Agent (environment)
 
-BIRD snippets are generated for BIRD2 using the dn42 wiki MP-BGP over IPv6 with Extended Next Hop
-style. Your main BIRD config must define a `template bgp dnpeers` and include the agent peer
-directory, for example `include "/etc/dn42-autopeer/bird/*";`.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `AGENT_LISTEN` | `:8080` | Listen address. |
+| `AGENT_TOKEN` | _(empty)_ | Bearer token required on every request (from the admin panel). Empty ⇒ no auth. |
+| `AGENT_MAX_CONCURRENCY` | `4` | Concurrent looking-glass commands; extra requests get `429` instead of queueing (`0` disables the cap). |
+| `BIRDC_PATH` / `TRACEROUTE_PATH` / `PING_PATH` / `WG_QUICK_PATH` | `birdc` / `traceroute` / `ping` / `wg-quick` | Tool paths. |
+| `AGENT_DEPLOY_DIR` | `/etc/dn42-autopeer` | Base directory for written configs. |
+| `WIREGUARD_PEER_DIR` / `BIRD_PEER_DIR` | `<deploy>/wireguard` / `<deploy>/bird` | Per-peer snippet directories. |
+| `WIREGUARD_PRIVATE_KEY` | _(empty)_ | Router private key substituted into generated WireGuard configs. |
+| `AGENT_DEPLOY_RELOAD_CMD` | _(empty)_ | Command run (fixed argv) after writing files, e.g. `systemctl reload bird`. |
 
-## Telegram Commands
+## Looking glass
+
+The public looking glass dispatches `ping`, `traceroute` (`trace`), `birdc show route` (`route`),
+and `birdc show protocols` (`status`) to an enabled agent.
+
+> **Target range:** the looking glass accepts **any** IPv4/IPv6 address or prefix — not just dn42
+> space. This is deliberate. Abuse is bounded by the per-IP rate limit (`LG_RATE_LIMIT`) and the
+> agent concurrency cap (`AGENT_MAX_CONCURRENCY`), and targets are validated and passed as fixed
+> argv (never through a shell). If you do not want public reachability of arbitrary addresses, put
+> the service behind authentication or a network boundary.
+
+## Telegram
 
 ```text
 /login                 link your dn42 ASN (Kioubit)
@@ -182,14 +179,81 @@ directory, for example `include "/etc/dn42-autopeer/bird/*";`.
 /create                create a peer (guided wizard)
 /edit                  edit one of your peers (guided wizard)
 /delete                delete one of your peers (guided wizard)
-/ping <dn42-ip> [agent]
-/trace <dn42-ip> [agent]
+/ping  <dn42-ip> [agent]
+/trace <dn42-ip> [agent]      (/mtr is kept as an alias)
 /route <dn42-prefix|dn42-ip> [agent]
 /cancel                abort the current guided action
 ```
 
-`/create`, `/edit`, and `/delete` are step-by-step wizards: the bot asks for the PoP, WireGuard
-endpoint, and public key one at a time. Link-local addresses are auto-derived from the ASNs (the
-same defaults the web portal prefills); use the web portal if you need custom addresses. `/trace`
-runs `traceroute` (`/mtr` is kept as an alias). `/status` reports each of your own peers'
-`birdc show protocols all` detail (Established / Idle / Connection reset, route counts).
+Run the bot alongside the backend with `python start.py`, or on its own:
+
+```powershell
+cd backend
+.\.venv\Scripts\python -m app.bot.main
+```
+
+Telegram Mini App verification requires `DOMAIN` to resolve to a public `https://` URL. For local
+backend testing without Telegram, use `python start.py --allow-http`.
+
+## Agent
+
+WireGuard configs are complete `wg-quick` files written as `dn42p<peer-id>.conf`; the agent runs
+`wg-quick down`/`up` and then reloads BIRD if `AGENT_DEPLOY_RELOAD_CMD` is set. BIRD snippets follow
+the dn42 wiki MP-BGP-over-IPv6 (Extended Next Hop) style, so your main BIRD config must define a
+`template bgp dnpeers` and include the peer directory, for example:
+
+```text
+include "/etc/dn42-autopeer/bird/*";
+```
+
+The full request/response shape of every agent route is documented in
+[`docs/agent-api.md`](docs/agent-api.md).
+
+## Security model
+
+- **Agent runs as root.** Every user-supplied value that can reach a router config is strictly
+  validated: WireGuard endpoint and public key, ASN, and the protocol name (which becomes a file
+  name and a `birdc` argument). Commands use fixed argv, never a shell; targets are screened for
+  shell/format metacharacters, and writes are confined to the agent's peer directories (no path
+  traversal).
+- **Secrets are compared in constant time** (agent bearer token, Telegram backend secret).
+- **The backend refuses placeholder secrets** at startup unless explicitly allowed.
+- **Web sessions** are signed cookies, `HttpOnly`/`SameSite=Lax` and `Secure` unless insecure
+  defaults are enabled.
+- **The public looking glass** is rate-limited per client IP and bounded by agent concurrency;
+  failures return a generic message rather than leaking the internal agent URL.
+- **Auth** is delegated to Kioubit: the backend verifies the ECDSA signature, a short replay window,
+  and the issuing domain before trusting any ASN claim.
+
+See the [auth flow](docs/auth-flow.md) for the full web and Telegram login sequences.
+
+## Troubleshooting
+
+| Symptom | Likely cause / fix |
+| --- | --- |
+| Backend exits: *"Refusing to start with insecure default secrets"* | Set strong `SESSION_SECRET` and `TELEGRAM_BACKEND_SECRET`, or pass `--allow-http` for local testing. |
+| *"Telegram verification needs HTTPS"* on start | `DOMAIN` is not an HTTPS URL. Use a public HTTPS domain, or `--allow-http` (Mini App verification stays disabled). |
+| `uvicorn`/`httpx` missing in an existing `.venv` | Reinstall: `pip install -e .` inside the venv. |
+| Looking glass: *"could not reach the looking glass agent"* | Agent not running, wrong Agent URL, or token mismatch between the admin panel and `AGENT_TOKEN`. |
+| Looking glass returns `429` | Per-IP rate limit (`LG_RATE_LIMIT`) or agent busy (`AGENT_MAX_CONCURRENCY`). |
+| BGP session never comes up | Ensure the main BIRD config defines `template bgp dnpeers` and includes the peer directory. |
+
+## Layout
+
+```text
+backend/            Python FastAPI control plane
+  app/web/          web routers: pages, portal, admin, looking glass (+ shared deps)
+  app/api/          bot-only REST API (telegram)
+  app/bot/          aiogram Telegram bot
+  app/peer/         peer lifecycle: validation, config rendering, deploy/teardown
+  app/lg/           agent client, target validation, rate limiter
+  app/auth/         Kioubit verification, sessions, user/ASN service
+  app/db/           SQLAlchemy models, session, schema/seed
+agent/              Go agent
+  cmd/agent/        entrypoint
+  internal/api/     HTTP server (auth, concurrency cap, JSON decode)
+  internal/runner/  command execution, IP validation, config deploy
+deploy/systemd/     example systemd units
+docs/               agent API and auth flow
+start.py            one-command launcher (backend + bot)
+```

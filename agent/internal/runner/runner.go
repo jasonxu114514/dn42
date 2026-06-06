@@ -52,8 +52,8 @@ type RemoveRequest struct {
 }
 
 var (
-	dn42IPv4Net = parseCIDR("172.20.0.0/14")
-	dn42IPv6Net = parseCIDR("fd00::/8")
+	allowedIPv4Net = parseCIDR("0.0.0.0/0")
+	allowedIPv6Net = parseCIDR("::/0")
 	safeNameRE  = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]{0,79}$`)
 )
 
@@ -87,7 +87,7 @@ func parseCIDR(value string) *net.IPNet {
 	return network
 }
 
-func ValidateDN42IPTarget(target string) error {
+func ValidateIPTarget(target string) error {
 	target = strings.TrimSpace(target)
 	if target == "" || len(target) > 255 {
 		return errors.New("invalid target length")
@@ -97,15 +97,15 @@ func ValidateDN42IPTarget(target string) error {
 	}
 	ip := net.ParseIP(target)
 	if ip == nil {
-		return errors.New("target must be a DN42 IP address")
+		return errors.New("target must be a valid IP address")
 	}
-	if !isDN42IP(ip) {
-		return errors.New("target must be inside DN42 address space")
+	if !isAllowedIP(ip) {
+		return errors.New("target is outside the allowed address space")
 	}
 	return nil
 }
 
-func ValidateDN42RouteTarget(target string) error {
+func ValidateRouteTarget(target string) error {
 	target = strings.TrimSpace(target)
 	if target == "" || len(target) > 255 {
 		return errors.New("invalid target length")
@@ -114,17 +114,17 @@ func ValidateDN42RouteTarget(target string) error {
 		return errors.New("target contains unsupported characters")
 	}
 	if ip := net.ParseIP(target); ip != nil {
-		if isDN42IP(ip) {
+		if isAllowedIP(ip) {
 			return nil
 		}
-		return errors.New("target must be inside DN42 address space")
+		return errors.New("target is outside the allowed address space")
 	}
 	_, network, err := net.ParseCIDR(target)
 	if err != nil {
-		return errors.New("route target must be a DN42 IP address or CIDR prefix")
+		return errors.New("route target must be an IP address or CIDR prefix")
 	}
-	if !isDN42Prefix(network) {
-		return errors.New("target must be inside DN42 address space")
+	if !isAllowedPrefix(network) {
+		return errors.New("target is outside the allowed address space")
 	}
 	return nil
 }
@@ -144,12 +144,12 @@ func hasUnsafeTargetChar(target string) bool {
 	return false
 }
 
-func isDN42IP(ip net.IP) bool {
-	return dn42IPv4Net.Contains(ip) || dn42IPv6Net.Contains(ip)
+func isAllowedIP(ip net.IP) bool {
+	return allowedIPv4Net.Contains(ip) || allowedIPv6Net.Contains(ip)
 }
 
-func isDN42Prefix(network *net.IPNet) bool {
-	return containsPrefix(dn42IPv4Net, network) || containsPrefix(dn42IPv6Net, network)
+func isAllowedPrefix(network *net.IPNet) bool {
+	return containsPrefix(allowedIPv4Net, network) || containsPrefix(allowedIPv6Net, network)
 }
 
 func containsPrefix(parent *net.IPNet, child *net.IPNet) bool {
@@ -191,26 +191,26 @@ func (r Runner) run(args ...string) Result {
 }
 
 func (r Runner) Ping(target string) Result {
-	if err := ValidateDN42IPTarget(target); err != nil {
+	if err := ValidateIPTarget(target); err != nil {
 		return Result{OK: false, Output: err.Error()}
 	}
 	return r.run(r.PingPath, "-c", "4", "-W", "3", target)
 }
 
 func (r Runner) Trace(target string) Result {
-	if err := ValidateDN42IPTarget(target); err != nil {
+	if err := ValidateIPTarget(target); err != nil {
 		return Result{OK: false, Output: err.Error()}
 	}
 	args := []string{r.TraceroutePath, "-n", "-q", "1", "-w", "2", "-m", "20"}
 	if ip := net.ParseIP(target); ip != nil && ip.To4() == nil {
-		args = append(args, "-6") // force IPv6 for fd00::/8 targets
+		args = append(args, "-6") // force IPv6 for IPv6 targets
 	}
 	args = append(args, target)
 	return r.run(args...)
 }
 
 func (r Runner) Route(target string) Result {
-	if err := ValidateDN42RouteTarget(target); err != nil {
+	if err := ValidateRouteTarget(target); err != nil {
 		return Result{OK: false, Output: err.Error()}
 	}
 	return r.run(r.BirdcPath, "show", "route", target)

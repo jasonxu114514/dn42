@@ -18,7 +18,7 @@ Body:
 {"target":"172.20.0.1"}
 ```
 
-Target must be a single IP inside DN42 address space (`172.20.0.0/14` or `fd00::/8`).
+Target must be a single IP address (any IPv4 or IPv6).
 
 Runs fixed argv:
 
@@ -28,7 +28,7 @@ ping -c 4 -W 3 <target>
 
 ## `POST /v1/lg/trace`
 
-Target must be a single IP inside DN42 address space (`172.20.0.0/14` or `fd00::/8`).
+Target must be a single IP address (any IPv4 or IPv6).
 
 Runs fixed argv (`-6` is added for IPv6 targets):
 
@@ -40,7 +40,7 @@ traceroute -n -q 1 -w 2 -m 20 <target>
 
 ## `POST /v1/lg/route`
 
-Target must be an IP or CIDR prefix fully inside DN42 address space (`172.20.0.0/14` or `fd00::/8`).
+Target must be an IP or CIDR prefix (any IPv4 or IPv6).
 
 Runs fixed argv:
 
@@ -48,7 +48,7 @@ Runs fixed argv:
 birdc show route <target>
 ```
 
-Targets are validated against DN42 address ranges and never passed through a shell.
+Targets are validated as well-formed IP addresses or prefixes and never passed through a shell.
 
 ## `POST /v1/peers/deploy`
 

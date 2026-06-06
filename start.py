@@ -143,6 +143,11 @@ def main() -> int:
         print("[error] Choose at most one of --backend-only or --bot-only.")
         return 2
 
+    if args.allow_http:
+        # Local testing mode: also tolerate placeholder SESSION_SECRET / TELEGRAM_BACKEND_SECRET
+        # so the backend does not refuse to start. Never use --allow-http in production.
+        os.environ["ALLOW_INSECURE_DEFAULTS"] = "1"
+
     if not BACKEND_DIR.exists():
         print(f"[error] Backend directory not found: {BACKEND_DIR}")
         return 1

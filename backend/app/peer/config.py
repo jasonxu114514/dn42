@@ -1,5 +1,20 @@
+from urllib.parse import urlsplit
+
 from app.db.models import Agent, PeerRequest
 from app.peer.validation import asn_link_local_address, normalize_asn_number, wireguard_listen_port
+
+
+def agent_wireguard_endpoint(peer: PeerRequest, agent: Agent) -> str:
+    """Public WireGuard endpoint a peer dials: the agent host plus the derived listen port."""
+    parsed = urlsplit(agent.url if "://" in agent.url else f"//{agent.url}")
+    host = parsed.hostname or agent.url.strip()
+    if ":" in host:  # bare IPv6, wrap for host:port form
+        host = f"[{host}]"
+    try:
+        port = wireguard_listen_port(peer.asn)
+    except ValueError:
+        return f"{host}:<wg-port>"
+    return f"{host}:{port}"
 
 
 def peer_link_ip(peer: PeerRequest) -> str:
@@ -34,7 +49,7 @@ def render_user_config(peer: PeerRequest, agent: Agent, local_asn: str = "<our-a
 
 [Peer]
 PublicKey = <our-wireguard-public-key>
-Endpoint = {agent.url}
+Endpoint = {agent_wireguard_endpoint(peer, agent)}
 AllowedIPs = 172.16.0.0/12, fd00::/8
 PersistentKeepalive = 25
 

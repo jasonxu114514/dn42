@@ -46,6 +46,11 @@ type DeployResult struct {
 	Files   []string `json:"files"`
 }
 
+type RemoveRequest struct {
+	RequestID    int    `json:"request_id"`
+	ProtocolName string `json:"protocol_name"`
+}
+
 var (
 	dn42IPv4Net = parseCIDR("172.20.0.0/14")
 	dn42IPv6Net = parseCIDR("fd00::/8")
@@ -255,6 +260,48 @@ func (r Runner) DeployPeer(req DeployRequest) DeployResult {
 	output = strings.TrimSpace(output + "\nwg-quick up:\n" + up.Output)
 	if !up.OK {
 		return DeployResult{OK: false, Applied: true, Output: output, Files: files}
+	}
+	if r.DeployReloadCmd != "" {
+		reload := r.run(strings.Fields(r.DeployReloadCmd)...)
+		output = strings.TrimSpace(output + "\n" + reload.Output)
+		if !reload.OK {
+			return DeployResult{OK: false, Applied: true, Output: output, Files: files}
+		}
+	}
+	return DeployResult{OK: true, Applied: true, Output: output, Files: files}
+}
+
+func (r Runner) RemovePeer(req RemoveRequest) DeployResult {
+	req.ProtocolName = strings.TrimSpace(req.ProtocolName)
+	if req.RequestID <= 0 {
+		return DeployResult{OK: false, Output: "request_id is required"}
+	}
+	if !safeNameRE.MatchString(req.ProtocolName) {
+		return DeployResult{OK: false, Output: "invalid protocol_name"}
+	}
+
+	files := []string{
+		filepath.Join(r.WireGuardPeerDir, req.ProtocolName+".conf"),
+		filepath.Join(r.BirdPeerDir, req.ProtocolName+".conf"),
+	}
+	if err := ensureChildPath(r.WireGuardPeerDir, files[0]); err != nil {
+		return DeployResult{OK: false, Output: err.Error()}
+	}
+	if err := ensureChildPath(r.BirdPeerDir, files[1]); err != nil {
+		return DeployResult{OK: false, Output: err.Error()}
+	}
+
+	output := "removed peer config"
+	if _, err := os.Stat(files[0]); err == nil {
+		down := r.run(r.WgQuickPath, "down", files[0])
+		if down.Output != "" {
+			output = strings.TrimSpace(output + "\nwg-quick down:\n" + down.Output)
+		}
+	}
+	for _, file := range files {
+		if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return DeployResult{OK: false, Applied: true, Output: strings.TrimSpace(output + "\n" + err.Error()), Files: files}
+		}
 	}
 	if r.DeployReloadCmd != "" {
 		reload := r.run(strings.Fields(r.DeployReloadCmd)...)

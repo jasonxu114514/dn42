@@ -57,6 +57,23 @@ def deploy_peer(peer: PeerRequest, agent: Agent, settings: Settings, timeout: fl
     return response.json()
 
 
+def remove_peer(peer: PeerRequest, agent: Agent, timeout: float = 20.0) -> dict[str, Any]:
+    """Ask the agent to tear down a peer: bring the tunnel down and delete its config files."""
+    headers = {"Authorization": f"Bearer {agent.token}"} if agent.token else {}
+    payload = {
+        "request_id": peer.id,
+        "protocol_name": peer_protocol_name(peer, agent),
+    }
+    response = httpx.post(
+        f"{agent.url.rstrip('/')}/v1/peers/remove",
+        headers=headers,
+        json=payload,
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def apply_deploy_result(peer: PeerRequest, result: dict[str, Any]) -> None:
     ok = bool(result.get("ok", False))
     peer.deploy_output = str(result.get("output", result))

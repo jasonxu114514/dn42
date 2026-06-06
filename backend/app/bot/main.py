@@ -20,7 +20,7 @@ settings = get_settings()
 
 class Backend:
     def __init__(self) -> None:
-        self.base_url = settings.base_url.rstrip("/")
+        self.base_url = settings.bot_backend_url.rstrip("/")
         self.headers = {"X-Backend-Secret": settings.telegram_backend_secret}
 
     async def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:

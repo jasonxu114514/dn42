@@ -22,6 +22,29 @@ docs/         notes and API flow
 
 ## Backend
 
+On a Linux server:
+
+```sh
+cd ~/dn42/backend
+cp .env.example .env
+python3.11 -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
+cd ..
+python3 start.py
+```
+
+If `.venv` already exists but `uvicorn` or `httpx` is missing, reinstall the backend dependencies:
+
+```sh
+cd ~/dn42/backend
+. .venv/bin/activate
+python -m pip install -e .
+```
+
+On Windows:
+
 ```powershell
 cd backend
 Copy-Item .env.example .env
@@ -46,6 +69,7 @@ SESSION_SECRET=<random secret>
 LOCAL_ASN=424242xxxx
 TELEGRAM_BOT_TOKEN=<from BotFather>
 TELEGRAM_BACKEND_SECRET=<random shared secret>
+TELEGRAM_BACKEND_URL=http://127.0.0.1:8000
 DEFAULT_AGENT_URL=http://127.0.0.1:8080
 ```
 
@@ -53,11 +77,23 @@ DEFAULT_AGENT_URL=http://127.0.0.1:8080
 authentication. `TELEGRAM_BACKEND_SECRET` is a random shared secret used only between the Telegram
 bot and backend; set the same value for both processes. You can generate one with
 `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+The backend refuses to start while `SESSION_SECRET` or `TELEGRAM_BACKEND_SECRET` is left at a
+placeholder value (such as `change-me` or `dev-...`). Set strong random values, or pass
+`--allow-http` to `start.py` (which sets `ALLOW_INSECURE_DEFAULTS=1`) for local testing only.
+`TELEGRAM_BACKEND_URL` is the internal URL the bot uses to call the FastAPI backend. Keep it as
+`http://127.0.0.1:8000` when the bot and backend run on the same host, even when `DOMAIN` is a
+public HTTPS URL.
 
 Local and remote peer addresses are requested in the portal and default to link-local addresses
 generated from ASNs: `4242420099` becomes `fe80::99`, and `4242421260` becomes `fe80::1260`.
 Peer creation is fully automatic: the backend immediately approves the peer, calls the selected
 agent, and posts generated WireGuard and BIRD configs to `/v1/peers/deploy`.
+
+Each PoP (agent) accepts at most one peer per ASN; if you already have a peer on an agent, edit or
+delete the existing one instead of creating a second. Deleting or disabling a peer tears it down on
+the router (the agent runs `wg-quick down` and removes the WireGuard and BIRD snippets) so revoked
+peers stop forwarding immediately. User-supplied endpoint and WireGuard public key are strictly
+validated before they are written into any router config.
 
 The control plane talks directly to agents: `Backend -> Agent`. Create each controlled router as
 an Agent in the admin panel with its display name, location, and Agent API URL. The backend
@@ -122,7 +158,11 @@ BIRD_PEER_DIR=/etc/dn42-autopeer/bird
 WIREGUARD_PRIVATE_KEY=<router wireguard private key>
 WG_QUICK_PATH=/usr/bin/wg-quick
 AGENT_DEPLOY_RELOAD_CMD=systemctl reload bird
+AGENT_MAX_CONCURRENCY=4
 ```
+
+`AGENT_MAX_CONCURRENCY` bounds how many looking glass commands run at once; extra requests get
+`429` instead of queueing (set `0` to disable the limit).
 
 WireGuard configs are complete `wg-quick` configs. The agent writes `dn42p<peer-id>.conf`, runs
 `wg-quick down <file>` and `wg-quick up <file>`, then reloads BIRD if configured. The WireGuard

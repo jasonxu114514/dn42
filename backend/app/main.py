@@ -1,3 +1,4 @@
+import logging
 import secrets
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
@@ -13,24 +14,50 @@ from app.auth.session import current_user, login_user, logout_user
 from app.api.telegram import router as telegram_router
 from app.config import get_settings
 from app.db.init_db import create_schema, seed_defaults
-from app.db.models import Agent, LGQuery, PeerRequest, utcnow
+from app.db.models import Agent, LGQuery, PeerRequest, User, utcnow
 from app.db.session import SessionLocal, get_db
 from app.lg.client import AgentClient
+from app.lg.ratelimit import SlidingWindowRateLimiter
 from app.lg.validation import validate_query_type, validate_target
 from app.peer.config import render_operator_config, render_user_config
-from app.peer.deploy import apply_deploy_result, deploy_peer
-from app.peer.validation import asn_link_local_address, normalize_link_local_address
+from app.peer.deploy import apply_deploy_result, deploy_peer, remove_peer
+from app.peer.validation import (
+    asn_link_local_address,
+    normalize_endpoint,
+    normalize_link_local_address,
+    normalize_wireguard_key,
+)
 
+logger = logging.getLogger("dn42.autopeer")
 settings = get_settings()
 templates = Jinja2Templates(directory="app/templates")
+lg_rate_limiter = SlidingWindowRateLimiter(settings.lg_rate_limit, settings.lg_rate_window_seconds)
 app = FastAPI(title=settings.app_name)
-app.add_middleware(SessionMiddleware, secret_key=settings.session_secret)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.session_secret,
+    https_only=not settings.allow_insecure_defaults,
+    same_site="lax",
+)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.include_router(telegram_router)
 
 
 @app.on_event("startup")
 def startup() -> None:
+    insecure = settings.insecure_default_secrets()
+    if insecure and not settings.allow_insecure_defaults:
+        raise RuntimeError(
+            "Refusing to start with insecure default secrets: "
+            + ", ".join(insecure)
+            + ". Set strong random values in .env, or pass --allow-http / set "
+            "ALLOW_INSECURE_DEFAULTS=1 for local testing only."
+        )
+    if insecure:
+        logger.warning(
+            "Starting with insecure default secrets (%s) because insecure defaults are allowed.",
+            ", ".join(insecure),
+        )
     create_schema()
     db = SessionLocal()
     try:
@@ -39,12 +66,12 @@ def startup() -> None:
         db.close()
 
 
-def render(request: Request, name: str, context: dict | None = None) -> HTMLResponse:
-    db = SessionLocal()
-    try:
-        user = current_user(request, db)
-    finally:
-        db.close()
+def render(
+    request: Request,
+    name: str,
+    context: dict | None = None,
+    user: User | None = None,
+) -> HTMLResponse:
     base = {"request": request, "settings": settings, "user": user}
     if context:
         base.update(context)
@@ -54,7 +81,7 @@ def render(request: Request, name: str, context: dict | None = None) -> HTMLResp
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     agents = query_enabled_agents(db).all()
-    return render(request, "index.html", {"agents": agents})
+    return render(request, "index.html", {"agents": agents}, user=current_user(request, db))
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -67,6 +94,7 @@ def login_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
             "return_url": f"{settings.base_url}/auth/kioubit/callback",
             "token": challenge.token,
         },
+        user=current_user(request, db),
     )
 
 
@@ -98,6 +126,7 @@ def kioubit_callback(
 def telegram_auth_page(
     request: Request,
     token: str,
+    db: Session = Depends(get_db),
 ) -> HTMLResponse:
     return render(
         request,
@@ -106,6 +135,7 @@ def telegram_auth_page(
             "return_url": f"{settings.base_url}/telegram/auth?token={token}",
             "token": token,
         },
+        user=current_user(request, db),
     )
 
 
@@ -138,6 +168,7 @@ def portal(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
             "default_local_link_address": default_local_link_address,
             "default_peer_link_address": default_peer_link_address,
         },
+        user=user,
     )
 
 
@@ -157,9 +188,19 @@ def create_peer_request(
     agent = query_enabled_agents(db).filter(Agent.id == agent_id).one_or_none()
     if agent is None:
         raise HTTPException(status_code=400, detail="Unknown or disabled agent")
-    if len(wg_public_key.strip()) < 32:
-        raise HTTPException(status_code=400, detail="WireGuard public key looks too short")
+    existing = (
+        db.query(PeerRequest)
+        .filter(PeerRequest.agent_id == agent.id, PeerRequest.asn == user.primary_asn)
+        .first()
+    )
+    if existing is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="You already have a peer on this PoP. Edit or delete the existing one instead.",
+        )
     try:
+        endpoint = normalize_endpoint(endpoint)
+        wg_public_key = normalize_wireguard_key(wg_public_key)
         local_link_address = normalize_link_local_address(local_link_address)
         peer_link_address = normalize_link_local_address(peer_link_address)
     except ValueError as exc:
@@ -168,8 +209,8 @@ def create_peer_request(
         user_id=user.id,
         asn=user.primary_asn,
         agent_id=agent.id,
-        endpoint=endpoint.strip(),
-        wg_public_key=wg_public_key.strip(),
+        endpoint=endpoint,
+        wg_public_key=wg_public_key,
         local_link_address=local_link_address,
         peer_link_address=peer_link_address,
         status="approved",
@@ -197,6 +238,7 @@ def peer_config(peer_id: int, request: Request, db: Session = Depends(get_db)) -
             "title": f"Peer #{peer.id} config",
             "config": render_user_config(peer, peer.agent, settings.local_asn or "<our-asn>"),
         },
+        user=user,
     )
 
 
@@ -207,7 +249,7 @@ def admin(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
         raise HTTPException(status_code=403, detail="Admin access required")
     agents = db.query(Agent).order_by(Agent.name).all()
     peers = db.query(PeerRequest).order_by(PeerRequest.created_at.desc()).all()
-    return render(request, "admin.html", {"agents": agents, "peers": peers})
+    return render(request, "admin.html", {"agents": agents, "peers": peers}, user=user)
 
 
 @app.post("/admin/agents")
@@ -331,21 +373,37 @@ def admin_update_peer(
         raise HTTPException(status_code=400, detail="Unknown agent")
     if status not in {"approved", "disabled"}:
         raise HTTPException(status_code=400, detail="Unsupported peer status")
-    if len(wg_public_key.strip()) < 32:
-        raise HTTPException(status_code=400, detail="WireGuard public key looks too short")
+    duplicate = (
+        db.query(PeerRequest)
+        .filter(
+            PeerRequest.agent_id == agent.id,
+            PeerRequest.asn == peer.asn,
+            PeerRequest.id != peer.id,
+        )
+        .first()
+    )
+    if duplicate is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"AS{peer.asn} already has another peer (#{duplicate.id}) on this PoP.",
+        )
     try:
+        endpoint = normalize_endpoint(endpoint)
+        wg_public_key = normalize_wireguard_key(wg_public_key)
         local_link_address = normalize_link_local_address(local_link_address)
         peer_link_address = normalize_link_local_address(peer_link_address)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     peer.agent_id = agent.id
     peer.agent = agent
-    peer.endpoint = endpoint.strip()
-    peer.wg_public_key = wg_public_key.strip()
+    peer.endpoint = endpoint
+    peer.wg_public_key = wg_public_key
     peer.local_link_address = local_link_address
     peer.peer_link_address = peer_link_address
     peer.status = status
     peer.updated_at = utcnow()
+    if status == "disabled":
+        teardown_peer_request(peer)
     db.commit()
     return RedirectResponse("/admin", status_code=303)
 
@@ -381,6 +439,15 @@ def admin_delete_peer(
     peer = db.query(PeerRequest).filter(PeerRequest.id == peer_id).one_or_none()
     if peer is None:
         raise HTTPException(status_code=404, detail="Peer not found")
+    try:
+        remove_peer(peer, peer.agent)
+    except Exception as exc:
+        logger.warning(
+            "Could not tear down peer #%s on agent %s before delete: %s",
+            peer.id,
+            peer.agent.name,
+            exc,
+        )
     db.delete(peer)
     db.commit()
     return RedirectResponse("/admin", status_code=303)
@@ -401,6 +468,7 @@ def admin_peer_config(peer_id: int, request: Request, db: Session = Depends(get_
             "title": f"Operator config for peer #{peer.id}",
             "config": render_operator_config(peer, peer.agent, settings.local_asn or "<our-asn>"),
         },
+        user=user,
     )
 
 
@@ -418,6 +486,21 @@ def deploy_peer_request(peer: PeerRequest) -> None:
         peer.updated_at = utcnow()
 
 
+def teardown_peer_request(peer: PeerRequest) -> None:
+    peer.updated_at = utcnow()
+    try:
+        result = remove_peer(peer, peer.agent)
+        if bool(result.get("ok", False)):
+            peer.deploy_status = "removed"
+            peer.deployed_at = None
+        else:
+            peer.deploy_status = "failed"
+        peer.deploy_output = str(result.get("output", result))
+    except Exception as exc:
+        peer.deploy_status = "failed"
+        peer.deploy_output = f"teardown failed: {exc}"
+
+
 @app.post("/lg", response_class=HTMLResponse)
 async def looking_glass(
     request: Request,
@@ -426,6 +509,11 @@ async def looking_glass(
     target: str = Form(""),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    if not lg_rate_limiter.allow(client_ip(request)):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many looking glass queries. Please wait a moment and try again.",
+        )
     agent = query_enabled_agents(db).filter(Agent.id == agent_id).one_or_none()
     if agent is None:
         raise HTTPException(status_code=400, detail="Unknown or disabled agent")
@@ -436,11 +524,23 @@ async def looking_glass(
     try:
         normalized_query_type = validate_query_type(query_type)
         normalized_target = validate_target(normalized_query_type, target)
-        result = await AgentClient().query(agent, normalized_query_type, normalized_target)
-        ok = bool(result.get("ok", False))
-        result_text = str(result.get("output", result))
-    except Exception as exc:
-        result_text = f"Query failed: {exc}"
+    except ValueError as exc:
+        result_text = str(exc)
+    else:
+        try:
+            result = await AgentClient().query(agent, normalized_query_type, normalized_target)
+            ok = bool(result.get("ok", False))
+            result_text = str(result.get("output", result))
+        except ValueError as exc:
+            result_text = str(exc)
+        except Exception as exc:
+            logger.warning(
+                "Looking glass query failed (agent=%s, type=%s): %s",
+                agent.name,
+                normalized_query_type,
+                exc,
+            )
+            result_text = "Query failed: could not reach the looking glass agent."
     user = current_user(request, db)
     db.add(
         LGQuery(
@@ -458,8 +558,24 @@ async def looking_glass(
         request,
         "index.html",
         {"agents": agents, "lg_result": result_text, "lg_ok": ok, "last_query": normalized_query_type},
+        user=user,
     )
 
 
 def query_enabled_agents(db: Session):
     return db.query(Agent).filter(Agent.enabled.is_(True)).order_by(Agent.name)
+
+
+def client_ip(request: Request) -> str:
+    """Best-effort client identity for rate limiting.
+
+    Uses request.client.host by default. Set FORWARDED_IP_HEADER (e.g. ``X-Forwarded-For``)
+    only when running behind a trusted reverse proxy that sets it, otherwise every request
+    would share one bucket (the proxy IP).
+    """
+    header = settings.forwarded_ip_header.strip()
+    if header:
+        value = request.headers.get(header, "")
+        if value:
+            return value.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"

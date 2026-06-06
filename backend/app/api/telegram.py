@@ -1,3 +1,4 @@
+import secrets
 from typing import Any
 from typing import Literal
 
@@ -54,7 +55,7 @@ class LGRequest(BaseModel):
 
 def require_bot_secret(x_backend_secret: str = Header("")) -> None:
     settings = get_settings()
-    if x_backend_secret != settings.telegram_backend_secret:
+    if not secrets.compare_digest(x_backend_secret, settings.telegram_backend_secret):
         raise HTTPException(status_code=401, detail="Invalid bot secret")
 
 

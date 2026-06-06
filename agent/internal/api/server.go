@@ -36,9 +36,16 @@ type peerStatusRequest struct {
 	ProtocolName string `json:"protocol_name"`
 }
 
+// pubkeyResponse carries the agent's configured WireGuard public key to the control plane, which
+// caches it on the agent record and substitutes it into each peer's generated config.
+type pubkeyResponse struct {
+	PublicKey string `json:"public_key"`
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/status", s.auth(s.limit(s.status)))
+	mux.HandleFunc("/v1/pubkey", s.auth(s.pubkey))
 	mux.HandleFunc("/v1/lg/ping", s.auth(s.limit(s.withTarget(s.Runner.Ping))))
 	mux.HandleFunc("/v1/lg/trace", s.auth(s.limit(s.withTarget(s.Runner.Trace))))
 	mux.HandleFunc("/v1/lg/mtr", s.auth(s.limit(s.withTarget(s.Runner.Trace)))) // back-compat alias for trace
@@ -89,6 +96,19 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.Runner.Status())
+}
+
+// pubkey returns the agent's WireGuard public key. It runs no command (so it is not rate-limited),
+// but stays behind auth like every other endpoint. main() refuses to start without a valid key, so
+// this never serves an empty value.
+// pubkey 回傳 agent 的 WireGuard 公鑰。它不執行任何命令(故不受併發限制),但仍與其他端點一樣需經
+// 授權。main() 在金鑰無效時拒絕啟動,因此此處不會回傳空值。
+func (s *Server) pubkey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, runner.Result{OK: false, Output: "method not allowed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, pubkeyResponse{PublicKey: s.Runner.WireGuardPubKey})
 }
 
 // decodeJSON enforces the shared contract for every POST body endpoint: POST only,

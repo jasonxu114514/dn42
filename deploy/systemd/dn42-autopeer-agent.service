@@ -9,6 +9,7 @@ Environment=AGENT_TOKEN=change-me
 Environment=BIRDC_PATH=/usr/sbin/birdc
 Environment=WG_QUICK_PATH=/usr/bin/wg-quick
 Environment=WIREGUARD_PRIVATE_KEY=change-me
+Environment=WIREGUARD_PUBLIC_KEY=change-me
 ExecStart=/usr/local/bin/dn42-autopeer-agent
 Restart=on-failure
 User=root

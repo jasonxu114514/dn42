@@ -74,6 +74,10 @@ class Agent(Base):
     location: Mapped[str] = mapped_column(String(128), default="")
     url: Mapped[str] = mapped_column(String(512))
     token: Mapped[str] = mapped_column(String(255), default="")
+    # Our WireGuard public key on this PoP, fetched from the agent's GET /v1/pubkey and shown to
+    # peers in their generated config. Empty until first fetched (agent offline / not synced).
+    # 本 PoP 的 WireGuard 公鑰,取自 agent 的 GET /v1/pubkey,並填入對等端產生的設定。首次抓取前為空。
+    wg_public_key: Mapped[str] = mapped_column(String(128), default="")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

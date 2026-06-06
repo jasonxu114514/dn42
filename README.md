@@ -113,7 +113,8 @@ python start.py
 ```sh
 cd agent
 go build ./cmd/agent
-AGENT_LISTEN=:8080 AGENT_TOKEN=<token-from-admin-panel> ./agent
+AGENT_LISTEN=:8080 AGENT_TOKEN=<token-from-admin-panel> \
+  WIREGUARD_PRIVATE_KEY=<router-private-key> WIREGUARD_PUBLIC_KEY=<router-public-key> ./agent
 ```
 
 The backend starts with no agents. Add each router in the admin panel (name, location, Agent API
@@ -156,6 +157,7 @@ backend **refuses to start** while `SESSION_SECRET` or `TELEGRAM_BACKEND_SECRET`
 | `AGENT_DEPLOY_DIR` | `/etc/dn42-autopeer` | Base directory for written configs. |
 | `WIREGUARD_PEER_DIR` / `BIRD_PEER_DIR` | `<deploy>/wireguard` / `/etc/bird/peers` | Per-peer snippet directories. |
 | `WIREGUARD_PRIVATE_KEY` | _(empty)_ | Router private key substituted into generated WireGuard configs. |
+| `WIREGUARD_PUBLIC_KEY` | _(required)_ | Router public key for this PoP. The agent refuses to start without a valid value and serves it on `GET /v1/pubkey`; the backend caches it and fills it into each peer's generated config. |
 | `AGENT_DEPLOY_RELOAD_CMD` | _(empty)_ | Command run (fixed argv) after writing files, e.g. `systemctl reload bird`. |
 
 ## Looking glass

@@ -23,6 +23,7 @@ type Runner struct {
 	BirdPeerDir      string
 	DeployReloadCmd  string
 	WireGuardKey     string
+	WireGuardPubKey  string
 }
 
 type Result struct {
@@ -65,6 +66,7 @@ var (
 	allowedIPv6Net = parseCIDR("::/0")
 	safeNameRE     = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]{0,79}$`)
 	hostnameRE     = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$`)
+	wgKeyRE        = regexp.MustCompile(`^[A-Za-z0-9+/]{43}=$`)
 )
 
 func New() Runner {
@@ -79,7 +81,18 @@ func New() Runner {
 		BirdPeerDir:      envOr("BIRD_PEER_DIR", "/etc/bird/peers"),
 		DeployReloadCmd:  strings.TrimSpace(os.Getenv("AGENT_DEPLOY_RELOAD_CMD")),
 		WireGuardKey:     strings.TrimSpace(os.Getenv("WIREGUARD_PRIVATE_KEY")),
+		WireGuardPubKey:  strings.TrimSpace(os.Getenv("WIREGUARD_PUBLIC_KEY")),
 	}
+}
+
+// ValidWireGuardKey reports whether s is a syntactically valid base64 WireGuard key (32 bytes ->
+// 43 base64 chars + "="). The agent's own public key is served to peers verbatim, so the operator
+// must supply a well-formed value; this is the same shape the backend enforces for peer keys.
+// ValidWireGuardKey 判斷 s 是否為語法正確的 base64 WireGuard 金鑰（32 bytes → 43 個 base64 字元加
+// 一個 "="）。agent 自身的公鑰會原樣提供給對等端，故操作者必須給定格式正確的值；此格式與後端對
+// 對等端金鑰的要求一致。
+func ValidWireGuardKey(s string) bool {
+	return wgKeyRE.MatchString(strings.TrimSpace(s))
 }
 
 func envOr(name, fallback string) string {

@@ -9,7 +9,7 @@ from app.peer.config import (
     render_bird_peer_config,
     render_wireguard_peer_config,
 )
-from app.peer.validation import normalize_asn_number
+from app.peer.validation import normalize_asn_number, normalize_wireguard_key
 
 
 class PeerDeployError(Exception):
@@ -74,6 +74,33 @@ def remove_peer(peer: PeerRequest, agent: Agent, timeout: float = 20.0) -> dict[
     )
     response.raise_for_status()
     return response.json()
+
+
+def fetch_agent_public_key(agent: Agent, timeout: float = 10.0) -> str | None:
+    """Fetch and validate the agent's own WireGuard public key from its ``GET /v1/pubkey`` endpoint.
+
+    Returns the normalized 44-char key, or ``None`` when the agent is unreachable/errors or returns
+    a value that is not a well-formed WireGuard key. Callers treat ``None`` as "leave the cached key
+    unchanged" so a transient outage never wipes a previously fetched key.
+    """
+    headers = {"Authorization": f"Bearer {agent.token}"} if agent.token else {}
+    try:
+        response = httpx.get(
+            f"{agent.url.rstrip('/')}/v1/pubkey",
+            headers=headers,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    key = data.get("public_key") if isinstance(data, dict) else None
+    if not isinstance(key, str):
+        return None
+    try:
+        return normalize_wireguard_key(key)
+    except ValueError:
+        return None
 
 
 def apply_deploy_result(peer: PeerRequest, result: dict[str, Any]) -> None:

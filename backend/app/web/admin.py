@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Agent, PeerRequest, User
 from app.db.session import get_db
 from app.peer.config import render_operator_config
+from app.peer.deploy import fetch_agent_public_key
 from app.peer.service import delete_peer, deploy_peer_request, update_peer
 from app.web.deps import render, require_admin, settings
 
@@ -43,15 +44,17 @@ def admin_create_agent(
         raise HTTPException(status_code=400, detail="Agent name and URL are required")
     if db.query(Agent).filter(Agent.name == name).one_or_none() is not None:
         raise HTTPException(status_code=400, detail="Agent name already exists")
-    db.add(
-        Agent(
-            name=name,
-            location=location.strip(),
-            url=url,
-            token=secrets.token_urlsafe(32),
-            enabled=enabled == "on",
-        )
+    agent = Agent(
+        name=name,
+        location=location.strip(),
+        url=url,
+        token=secrets.token_urlsafe(32),
+        enabled=enabled == "on",
     )
+    # Best-effort fetch of this PoP's WireGuard public key. A PoP may be registered before its agent
+    # is online, so a failure just leaves the key empty (refresh it later from the admin panel).
+    agent.wg_public_key = fetch_agent_public_key(agent) or ""
+    db.add(agent)
     db.commit()
     return RedirectResponse("/admin", status_code=303)
 
@@ -80,6 +83,31 @@ def admin_update_agent(
     agent.location = location.strip()
     agent.url = url
     agent.enabled = enabled == "on"
+    # Re-sync the public key from the (maybe changed) URL; keep the old value if the agent is down.
+    fetched = fetch_agent_public_key(agent)
+    if fetched is not None:
+        agent.wg_public_key = fetched
+    db.commit()
+    return RedirectResponse("/admin", status_code=303)
+
+
+@router.post("/admin/agents/{agent_id}/refresh-pubkey")
+def admin_refresh_agent_pubkey(
+    agent_id: int,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+) -> RedirectResponse:
+    agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    key = fetch_agent_public_key(agent)
+    if key is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not fetch a valid WireGuard public key from the agent. Check the agent "
+            "URL/token and that WIREGUARD_PUBLIC_KEY is set on the agent, then retry.",
+        )
+    agent.wg_public_key = key
     db.commit()
     return RedirectResponse("/admin", status_code=303)
 

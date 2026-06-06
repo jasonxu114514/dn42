@@ -23,10 +23,11 @@
   {% for agent in agents %}
     <form id="agent-update-{{ agent.id }}" method="post" action="/admin/agents/{{ agent.id }}/update"></form>
     <form id="agent-token-{{ agent.id }}" method="post" action="/admin/agents/{{ agent.id }}/reset-token"></form>
+    <form id="agent-refresh-{{ agent.id }}" method="post" action="/admin/agents/{{ agent.id }}/refresh-pubkey"></form>
     <form id="agent-delete-{{ agent.id }}" method="post" action="/admin/agents/{{ agent.id }}/delete"></form>
   {% endfor %}
   <table>
-    <thead><tr><th>Name</th><th>Location</th><th>Agent API URL</th><th>Token</th><th>Enabled</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Name</th><th>Location</th><th>Agent API URL</th><th>Token</th><th>WG Pubkey</th><th>Enabled</th><th>Actions</th></tr></thead>
     <tbody>
       {% for agent in agents %}
         <tr>
@@ -34,6 +35,7 @@
           <td><input form="agent-update-{{ agent.id }}" name="location" value="{{ agent.location }}"></td>
           <td><input form="agent-update-{{ agent.id }}" name="url" value="{{ agent.url }}" required></td>
           <td><code class="token">{{ agent.token }}</code></td>
+          <td><code class="token">{{ agent.wg_public_key or "—" }}</code></td>
           <td>
             <label class="checkbox-label compact">
               <input form="agent-update-{{ agent.id }}" type="checkbox" name="enabled" {% if agent.enabled %}checked{% endif %}>
@@ -43,6 +45,7 @@
           <td class="actions">
             <button form="agent-update-{{ agent.id }}" type="submit">Save</button>
             <button form="agent-token-{{ agent.id }}" type="submit" class="secondary">Reset Token</button>
+            <button form="agent-refresh-{{ agent.id }}" type="submit" class="secondary">Refresh Pubkey</button>
             <button form="agent-delete-{{ agent.id }}" type="submit" class="danger">Delete</button>
           </td>
         </tr>

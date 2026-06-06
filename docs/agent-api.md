@@ -10,6 +10,20 @@ Runs:
 birdc show protocols
 ```
 
+## `GET /v1/pubkey`
+
+Returns the agent's own WireGuard public key (set via the `WIREGUARD_PUBLIC_KEY` environment
+variable). The control plane caches it per PoP and substitutes it into each peer's generated
+config:
+
+```json
+{"public_key": "<44-character base64 key>"}
+```
+
+Runs no command (so it is not bounded by `AGENT_MAX_CONCURRENCY`), but still requires the bearer
+token. The agent refuses to start without a valid `WIREGUARD_PUBLIC_KEY`, so this never returns an
+empty value.
+
 ## `POST /v1/lg/ping`
 
 Body:

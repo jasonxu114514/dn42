@@ -106,7 +106,8 @@ python start.py
 ```sh
 cd agent
 go build ./cmd/agent
-AGENT_LISTEN=:8080 AGENT_TOKEN=<管理面板取得的-token> ./agent
+AGENT_LISTEN=:8080 AGENT_TOKEN=<管理面板取得的-token> \
+  WIREGUARD_PRIVATE_KEY=<路由器私鑰> WIREGUARD_PUBLIC_KEY=<路由器公鑰> ./agent
 ```
 
 後端啟動時不會內建任何 agent。請在管理面板新增每個路由器（名稱、位置、Agent API URL）；後端會為每個
@@ -148,6 +149,7 @@ agent 產生 bearer token。請將該 token 設為對應路由器上的 `AGENT_T
 | `AGENT_DEPLOY_DIR` | `/etc/dn42-autopeer` | 寫入設定的基底目錄。 |
 | `WIREGUARD_PEER_DIR` / `BIRD_PEER_DIR` | `<deploy>/wireguard` / `/etc/bird/peers` | 各對等片段目錄。 |
 | `WIREGUARD_PRIVATE_KEY` | _（空）_ | 代入產生的 WireGuard 設定的路由器私鑰。 |
+| `WIREGUARD_PUBLIC_KEY` | _（必填）_ | 本 PoP 的路由器公鑰。agent 缺少有效值會拒絕啟動，並於 `GET /v1/pubkey` 提供；後端會快取並填入每個對等端產生的設定。 |
 | `AGENT_DEPLOY_RELOAD_CMD` | _（空）_ | 寫檔後執行的指令（固定 argv），例如 `systemctl reload bird`。 |
 
 ## Looking glass

@@ -41,6 +41,9 @@ def peer_protocol_name(peer: PeerRequest, agent: Agent) -> str:
 
 def render_user_config(peer: PeerRequest, agent: Agent, local_asn: str = "<our-asn>") -> str:
     local_neighbor = local_default_link_ip(local_asn)
+    # Use the PoP's cached public key; fall back to the visible placeholder if it has not been
+    # fetched yet, so the peer never silently gets a wrong key (the admin can Refresh Pubkey).
+    our_public_key = agent.wg_public_key or "<our-wireguard-public-key>"
     return f"""# Generated dn42 peer config for AS{peer.asn} on agent {agent.name}
 
 [Interface]
@@ -48,7 +51,7 @@ def render_user_config(peer: PeerRequest, agent: Agent, local_asn: str = "<our-a
 # Address = {peer_link_ip(peer)}/64
 
 [Peer]
-PublicKey = <our-wireguard-public-key>
+PublicKey = {our_public_key}
 Endpoint = {agent_wireguard_endpoint(peer, agent)}
 AllowedIPs = 172.16.0.0/12, fd00::/8
 PersistentKeepalive = 25

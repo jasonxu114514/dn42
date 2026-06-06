@@ -89,9 +89,9 @@ HELP_TEXT = (
     "/create - create a peer (guided)\n"
     "/edit - edit one of your peers (guided)\n"
     "/delete - delete one of your peers (guided)\n"
-    "/ping <dn42-ip> [agent]\n"
-    "/trace <dn42-ip> [agent]\n"
-    "/route <dn42-prefix|dn42-ip> [agent]\n"
+    "/ping <ip-or-host> [agent]\n"
+    "/trace <ip-or-host> [agent]\n"
+    "/route <prefix-or-ip> [agent]\n"
     "/cancel - abort the current guided action"
 )
 
@@ -354,7 +354,7 @@ async def status_cmd(message: Message) -> None:
 def parse_lg_args(message: Message) -> tuple[str, str]:
     parts = (message.text or "").split()
     if len(parts) < 2:
-        raise ValueError("Usage: /<command> <dn42-ip-or-prefix> [agent]")
+        raise ValueError("Usage: /<command> <target> [agent]")
     target = parts[1]
     agent = parts[2] if len(parts) > 2 else "local"
     return target, agent

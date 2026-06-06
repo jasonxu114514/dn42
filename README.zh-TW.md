@@ -148,16 +148,18 @@ AGENT_LISTEN=:8080 AGENT_TOKEN=<管理面板取得的-token> ./agent
 | `AGENT_MAX_CONCURRENCY` | `4` | 同時執行的 looking-glass 指令數；超出的請求得到 `429` 而非排隊（`0` 停用上限）。 |
 | `BIRDC_PATH` / `TRACEROUTE_PATH` / `PING_PATH` / `WG_QUICK_PATH` | `birdc` / `traceroute` / `ping` / `wg-quick` | 工具路徑。 |
 | `AGENT_DEPLOY_DIR` | `/etc/dn42-autopeer` | 寫入設定的基底目錄。 |
-| `WIREGUARD_PEER_DIR` / `BIRD_PEER_DIR` | `<deploy>/wireguard` / `<deploy>/bird` | 各對等片段目錄。 |
+| `WIREGUARD_PEER_DIR` / `BIRD_PEER_DIR` | `<deploy>/wireguard` / `/etc/bird/peers` | 各對等片段目錄。 |
 | `WIREGUARD_PRIVATE_KEY` | _（空）_ | 代入產生的 WireGuard 設定的路由器私鑰。 |
 | `AGENT_DEPLOY_RELOAD_CMD` | _（空）_ | 寫檔後執行的指令（固定 argv），例如 `systemctl reload bird`。 |
 
 ## Looking glass
 
-公開 looking glass 會將 `ping`、`traceroute`（`trace`）、`birdc show route`（`route`）與
-`birdc show protocols`（`status`）派送到一個已啟用的 agent。
+公開 looking glass 會將 `ping`、`traceroute`（`trace`）、`birdc show route for`（`route`）與
+`birdc show protocols`（`status`）派送到一個已啟用的 agent。`ping`／`trace` 亦接受 DNS 主機名（於
+agent 端解析）；`route` 採最長前綴查找,故單一主機 IP 或 `1.1.1.0/24` 之類的前綴都會解析到實際使用的
+路由。
 
-> **目標範圍：** looking glass 接受**任意** IPv4/IPv6 位址或前綴——不僅限 dn42 空間。此為刻意設計。
+> **目標範圍：** looking glass 接受**任意** IPv4/IPv6 位址或前綴（`ping`／`trace` 亦含主機名）——不僅限 dn42 空間。此為刻意設計。
 > 濫用由每 IP 速率限制（`LG_RATE_LIMIT`）與 agent 併發上限（`AGENT_MAX_CONCURRENCY`）約束，且目標
 > 會經驗證並以固定 argv 傳遞（絕不經 shell）。若你不希望任意位址可被公開探測，請將服務置於認證或
 > 網路邊界之後。
@@ -171,9 +173,9 @@ AGENT_LISTEN=:8080 AGENT_TOKEN=<管理面板取得的-token> ./agent
 /create                建立對等（引導式精靈）
 /edit                  編輯你的某個對等（引導式精靈）
 /delete                刪除你的某個對等（引導式精靈）
-/ping  <dn42-ip> [agent]
-/trace <dn42-ip> [agent]      （保留 /mtr 作為別名）
-/route <dn42-prefix|dn42-ip> [agent]
+/ping  <ip-或-主機名> [agent]
+/trace <ip-或-主機名> [agent]      （保留 /mtr 作為別名）
+/route <前綴-或-ip> [agent]
 /cancel                中止目前的引導式動作
 ```
 
@@ -194,7 +196,7 @@ WireGuard 設定為完整的 `wg-quick` 檔，寫成 `dn42p<peer-id>.conf`；age
 （Extended Next Hop）樣式，因此你的主 BIRD 設定必須定義 `template bgp dnpeers` 並 include 對等目錄，例如：
 
 ```text
-include "/etc/dn42-autopeer/bird/*";
+include "/etc/bird/peers/*.conf";
 ```
 
 每個 agent 路由的完整請求／回應格式記錄於 [`docs/agent-api.md`](docs/agent-api.md)。

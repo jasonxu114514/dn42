@@ -155,16 +155,19 @@ backend **refuses to start** while `SESSION_SECRET` or `TELEGRAM_BACKEND_SECRET`
 | `AGENT_MAX_CONCURRENCY` | `4` | Concurrent looking-glass commands; extra requests get `429` instead of queueing (`0` disables the cap). |
 | `BIRDC_PATH` / `TRACEROUTE_PATH` / `PING_PATH` / `WG_QUICK_PATH` | `birdc` / `traceroute` / `ping` / `wg-quick` | Tool paths. |
 | `AGENT_DEPLOY_DIR` | `/etc/dn42-autopeer` | Base directory for written configs. |
-| `WIREGUARD_PEER_DIR` / `BIRD_PEER_DIR` | `<deploy>/wireguard` / `<deploy>/bird` | Per-peer snippet directories. |
+| `WIREGUARD_PEER_DIR` / `BIRD_PEER_DIR` | `<deploy>/wireguard` / `/etc/bird/peers` | Per-peer snippet directories. |
 | `WIREGUARD_PRIVATE_KEY` | _(empty)_ | Router private key substituted into generated WireGuard configs. |
 | `AGENT_DEPLOY_RELOAD_CMD` | _(empty)_ | Command run (fixed argv) after writing files, e.g. `systemctl reload bird`. |
 
 ## Looking glass
 
-The public looking glass dispatches `ping`, `traceroute` (`trace`), `birdc show route` (`route`),
-and `birdc show protocols` (`status`) to an enabled agent.
+The public looking glass dispatches `ping`, `traceroute` (`trace`), `birdc show route for`
+(`route`), and `birdc show protocols` (`status`) to an enabled agent. `ping`/`trace` also accept a
+DNS hostname (resolved on the agent); `route` does a longest-prefix lookup so a host IP or a prefix
+such as `1.1.1.0/24` both resolve to the route actually used.
 
-> **Target range:** the looking glass accepts **any** IPv4/IPv6 address or prefix — not just dn42
+> **Target range:** the looking glass accepts **any** IPv4/IPv6 address or prefix (and a hostname
+> for `ping`/`trace`) — not just dn42
 > space. This is deliberate. Abuse is bounded by the per-IP rate limit (`LG_RATE_LIMIT`) and the
 > agent concurrency cap (`AGENT_MAX_CONCURRENCY`), and targets are validated and passed as fixed
 > argv (never through a shell). If you do not want public reachability of arbitrary addresses, put
@@ -179,9 +182,9 @@ and `birdc show protocols` (`status`) to an enabled agent.
 /create                create a peer (guided wizard)
 /edit                  edit one of your peers (guided wizard)
 /delete                delete one of your peers (guided wizard)
-/ping  <dn42-ip> [agent]
-/trace <dn42-ip> [agent]      (/mtr is kept as an alias)
-/route <dn42-prefix|dn42-ip> [agent]
+/ping  <ip-or-host> [agent]
+/trace <ip-or-host> [agent]      (/mtr is kept as an alias)
+/route <prefix-or-ip> [agent]
 /cancel                abort the current guided action
 ```
 
@@ -203,7 +206,7 @@ the dn42 wiki MP-BGP-over-IPv6 (Extended Next Hop) style, so your main BIRD conf
 `template bgp dnpeers` and include the peer directory, for example:
 
 ```text
-include "/etc/dn42-autopeer/bird/*";
+include "/etc/bird/peers/*.conf";
 ```
 
 The full request/response shape of every agent route is documented in

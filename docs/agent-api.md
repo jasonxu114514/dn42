@@ -18,7 +18,8 @@ Body:
 {"target":"172.20.0.1"}
 ```
 
-Target must be a single IP address (any IPv4 or IPv6).
+Target must be a single IP address (any IPv4 or IPv6) or a DNS hostname; ping/traceroute resolve
+the hostname themselves.
 
 Runs fixed argv:
 
@@ -28,7 +29,8 @@ ping -c 4 -W 3 <target>
 
 ## `POST /v1/lg/trace`
 
-Target must be a single IP address (any IPv4 or IPv6).
+Target must be a single IP address (any IPv4 or IPv6) or a DNS hostname; ping/traceroute resolve
+the hostname themselves.
 
 Runs fixed argv (`-6` is added for IPv6 targets):
 
@@ -45,10 +47,12 @@ Target must be an IP or CIDR prefix (any IPv4 or IPv6).
 Runs fixed argv:
 
 ```text
-birdc show route <target>
+birdc show route for <target>
 ```
 
-Targets are validated as well-formed IP addresses or prefixes and never passed through a shell.
+`for` makes BIRD do a longest-prefix forwarding lookup, so a bare host IP resolves to its covering
+route and a prefix such as `1.1.1.0/24` resolves to the route used for it. Targets are validated as
+well-formed IP addresses or prefixes and never passed through a shell.
 
 ## `POST /v1/peers/deploy`
 

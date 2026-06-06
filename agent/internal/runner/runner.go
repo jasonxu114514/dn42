@@ -53,13 +53,18 @@ type RemoveRequest struct {
 
 // allowedIPv4Net/allowedIPv6Net deliberately permit ANY IPv4/IPv6 target (0.0.0.0/0, ::/0), not
 // just dn42 space — an intentional product choice; do NOT narrow it back. safeNameRE bounds the
-// protocol name that becomes a file name and a birdc argv.
+// protocol name that becomes a file name and a birdc argv. hostnameRE bounds a DNS hostname that
+// ping/traceroute may resolve themselves (one or more RFC-1123 labels with at least one dot);
+// resolution happens on the agent and cannot widen the already-unrestricted target space.
 // allowedIPv4Net／allowedIPv6Net 刻意允許任意 IPv4/IPv6 目標（0.0.0.0/0、::/0），而非僅限 dn42，
 // 此為刻意決策，請勿改回限制範圍。safeNameRE 約束會成為檔名與 birdc 參數的 protocol name。
+// hostnameRE 約束 ping/traceroute 可自行解析的 DNS 主機名（一個以上 RFC-1123 標籤、至少含一個點）；
+// 解析在 agent 端進行，不會擴大本就無限制的目標範圍。
 var (
 	allowedIPv4Net = parseCIDR("0.0.0.0/0")
 	allowedIPv6Net = parseCIDR("::/0")
 	safeNameRE     = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]{0,79}$`)
+	hostnameRE     = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$`)
 )
 
 func New() Runner {
@@ -71,7 +76,7 @@ func New() Runner {
 		WgQuickPath:      envOr("WG_QUICK_PATH", "wg-quick"),
 		Timeout:          12 * time.Second,
 		WireGuardPeerDir: envOr("WIREGUARD_PEER_DIR", filepath.Join(deployDir, "wireguard")),
-		BirdPeerDir:      envOr("BIRD_PEER_DIR", filepath.Join(deployDir, "bird")),
+		BirdPeerDir:      envOr("BIRD_PEER_DIR", "/etc/bird/peers"),
 		DeployReloadCmd:  strings.TrimSpace(os.Getenv("AGENT_DEPLOY_RELOAD_CMD")),
 		WireGuardKey:     strings.TrimSpace(os.Getenv("WIREGUARD_PRIVATE_KEY")),
 	}
@@ -92,7 +97,14 @@ func parseCIDR(value string) *net.IPNet {
 	return network
 }
 
-func ValidateIPTarget(target string) error {
+// ValidateHostTarget accepts a ping/traceroute target: any IPv4/IPv6 address, or a DNS hostname
+// that ping/traceroute resolve themselves on the agent. Hostnames are only syntax-checked against
+// hostnameRE — the agent never resolves them here, so a name cannot smuggle in a target the address
+// space forbids (and that space is unrestricted anyway).
+// ValidateHostTarget 接受 ping/traceroute 的目標：任意 IPv4/IPv6 位址，或由 ping/traceroute 於
+// agent 端自行解析的 DNS 主機名。主機名僅以 hostnameRE 做語法檢查——agent 不在此解析,故名稱無法夾帶
+// 位址空間所禁止的目標（況且該空間本就無限制）。
+func ValidateHostTarget(target string) error {
 	target = strings.TrimSpace(target)
 	if target == "" || len(target) > 255 {
 		return errors.New("invalid target length")
@@ -100,14 +112,16 @@ func ValidateIPTarget(target string) error {
 	if hasUnsafeTargetChar(target) {
 		return errors.New("target contains unsupported characters")
 	}
-	ip := net.ParseIP(target)
-	if ip == nil {
-		return errors.New("target must be a valid IP address")
-	}
-	if !isAllowedIP(ip) {
+	if ip := net.ParseIP(target); ip != nil {
+		if isAllowedIP(ip) {
+			return nil
+		}
 		return errors.New("target is outside the allowed address space")
 	}
-	return nil
+	if len(target) <= 253 && hostnameRE.MatchString(target) {
+		return nil
+	}
+	return errors.New("target must be a valid IP address or hostname")
 }
 
 func ValidateRouteTarget(target string) error {
@@ -206,14 +220,14 @@ func (r Runner) run(args ...string) Result {
 }
 
 func (r Runner) Ping(target string) Result {
-	if err := ValidateIPTarget(target); err != nil {
+	if err := ValidateHostTarget(target); err != nil {
 		return Result{OK: false, Output: err.Error()}
 	}
 	return r.run(r.PingPath, "-c", "4", "-W", "3", target)
 }
 
 func (r Runner) Trace(target string) Result {
-	if err := ValidateIPTarget(target); err != nil {
+	if err := ValidateHostTarget(target); err != nil {
 		return Result{OK: false, Output: err.Error()}
 	}
 	args := []string{r.TraceroutePath, "-n", "-q", "1", "-w", "2", "-m", "20"}
@@ -224,11 +238,18 @@ func (r Runner) Trace(target string) Result {
 	return r.run(args...)
 }
 
+// Route runs `birdc show route for <target>`. The `for` keyword makes BIRD do a longest-prefix
+// forwarding lookup — returning the route actually used to reach the target — so a bare host IP
+// (which has no exact table entry) resolves to its covering route, and a prefix such as 1.1.1.0/24
+// resolves to the route used for it. Plain `show route <target>` only does an exact-prefix match.
+// Route 執行 `birdc show route for <target>`。`for` 讓 BIRD 進行最長前綴轉發查找,回傳實際用來到達
+// 目標的路由：因此單一主機 IP（路由表中無精確項）會解析到其涵蓋路由,而 1.1.1.0/24 之類的前綴會解析
+// 到實際使用的路由。純 `show route <target>` 僅做精確前綴匹配。
 func (r Runner) Route(target string) Result {
 	if err := ValidateRouteTarget(target); err != nil {
 		return Result{OK: false, Output: err.Error()}
 	}
-	return r.run(r.BirdcPath, "show", "route", target)
+	return r.run(r.BirdcPath, "show", "route", "for", target)
 }
 
 func (r Runner) Status() Result {

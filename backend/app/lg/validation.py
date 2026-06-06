@@ -1,7 +1,6 @@
 import ipaddress
 import re
 
-
 ALLOWED_QUERY_TYPES = {"ping", "trace", "mtr", "route", "status"}
 ALLOWED_NETWORKS = (
     ipaddress.ip_network("0.0.0.0/0"),

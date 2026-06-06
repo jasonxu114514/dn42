@@ -1,7 +1,6 @@
 import re
 from ipaddress import IPv6Address, ip_address, ip_interface
 
-
 _HOSTNAME_RE = re.compile(
     r"(?=.{1,253}\Z)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?"
 )

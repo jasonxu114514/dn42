@@ -3,7 +3,6 @@ from urllib.parse import urlsplit
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 # Secret values that ship as placeholders in code defaults and .env.example. The backend
 # refuses to start with any of these unless insecure defaults are explicitly allowed.
 INSECURE_SECRET_VALUES = frozenset(

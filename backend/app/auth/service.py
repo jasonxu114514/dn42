@@ -1,6 +1,6 @@
 import json
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -22,7 +22,7 @@ def create_challenge(
         purpose=purpose,
         telegram_user_id=telegram_user_id,
         telegram_chat_id=telegram_chat_id,
-        expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
+        expires_at=datetime.now(UTC) + timedelta(seconds=ttl_seconds),
     )
     db.add(challenge)
     db.commit()
@@ -40,8 +40,8 @@ def consume_challenge(db: Session, token: str, purpose: str) -> AuthChallenge:
         raise ValueError("Auth challenge was already used")
     expires_at = challenge.expires_at
     if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at < datetime.now(timezone.utc):
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if expires_at < datetime.now(UTC):
         raise ValueError("Auth challenge has expired")
     challenge.consumed_at = utcnow()
     db.commit()

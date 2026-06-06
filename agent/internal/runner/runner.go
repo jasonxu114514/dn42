@@ -54,7 +54,7 @@ type RemoveRequest struct {
 var (
 	allowedIPv4Net = parseCIDR("0.0.0.0/0")
 	allowedIPv6Net = parseCIDR("::/0")
-	safeNameRE  = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]{0,79}$`)
+	safeNameRE     = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]{0,79}$`)
 )
 
 func New() Runner {

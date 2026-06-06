@@ -1,7 +1,6 @@
 import asyncio
 import secrets
-from typing import Any
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -93,8 +92,12 @@ def require_bot_secret(x_backend_secret: str = Header("")) -> None:
         raise HTTPException(status_code=401, detail="Invalid bot secret")
 
 
-@router.post("/challenge", response_model=ChallengeResponse, dependencies=[Depends(require_bot_secret)])
-def telegram_challenge(payload: ChallengeRequest, db: Session = Depends(get_db)) -> ChallengeResponse:
+@router.post(
+    "/challenge", response_model=ChallengeResponse, dependencies=[Depends(require_bot_secret)]
+)
+def telegram_challenge(
+    payload: ChallengeRequest, db: Session = Depends(get_db)
+) -> ChallengeResponse:
     settings = get_settings()
     challenge = create_challenge(
         db,
@@ -166,7 +169,9 @@ async def telegram_lg(payload: LGRequest, db: Session = Depends(get_db)) -> dict
     user = get_user_by_telegram(db, payload.telegram_user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Telegram account is not verified")
-    agent = db.query(Agent).filter(Agent.name == payload.agent, Agent.enabled.is_(True)).one_or_none()
+    agent = (
+        db.query(Agent).filter(Agent.name == payload.agent, Agent.enabled.is_(True)).one_or_none()
+    )
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
     try:
@@ -202,16 +207,22 @@ def _owned_peer(db: Session, telegram_user_id: str, peer_id: int) -> PeerRequest
 
 
 @router.post("/peer/create", dependencies=[Depends(require_bot_secret)])
-def telegram_peer_create(payload: PeerCreateRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+def telegram_peer_create(
+    payload: PeerCreateRequest, db: Session = Depends(get_db)
+) -> dict[str, Any]:
     settings = get_settings()
     user = get_user_by_telegram(db, payload.telegram_user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Telegram account is not verified")
-    agent = db.query(Agent).filter(Agent.name == payload.agent, Agent.enabled.is_(True)).one_or_none()
+    agent = (
+        db.query(Agent).filter(Agent.name == payload.agent, Agent.enabled.is_(True)).one_or_none()
+    )
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
     try:
-        local_link_address, peer_link_address = derive_link_addresses(user.primary_asn, settings.local_asn)
+        local_link_address, peer_link_address = derive_link_addresses(
+            user.primary_asn, settings.local_asn
+        )
         peer = create_peer(
             db,
             user=user,
@@ -252,7 +263,9 @@ def telegram_peer_edit(payload: PeerEditRequest, db: Session = Depends(get_db)) 
 
 
 @router.post("/peer/delete", dependencies=[Depends(require_bot_secret)])
-def telegram_peer_delete(payload: PeerDeleteRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+def telegram_peer_delete(
+    payload: PeerDeleteRequest, db: Session = Depends(get_db)
+) -> dict[str, Any]:
     peer = _owned_peer(db, payload.telegram_user_id, payload.peer_id)
     delete_peer(db, peer=peer)
     db.commit()
@@ -260,7 +273,9 @@ def telegram_peer_delete(payload: PeerDeleteRequest, db: Session = Depends(get_d
 
 
 @router.post("/status", dependencies=[Depends(require_bot_secret)])
-async def telegram_status(payload: PeerStatusRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+async def telegram_status(
+    payload: PeerStatusRequest, db: Session = Depends(get_db)
+) -> dict[str, Any]:
     user = get_user_by_telegram(db, payload.telegram_user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Telegram account is not verified")
@@ -285,11 +300,21 @@ async def telegram_status(payload: PeerStatusRequest, db: Session = Depends(get_
         except Exception as exc:  # noqa: BLE001 - one dead agent must not fail the batch
             return f"status unavailable: {exc}"
 
-    details = await asyncio.gather(*(fetch(agent, proto) for _id, agent, _asn, _ds, proto in targets))
+    details = await asyncio.gather(
+        *(fetch(agent, proto) for _id, agent, _asn, _ds, proto in targets)
+    )
     return {
         "asn": user.primary_asn,
         "peers": [
-            {"id": pid, "agent": agent.name, "asn": asn, "deploy_status": deploy_status, "detail": detail}
-            for (pid, agent, asn, deploy_status, _proto), detail in zip(targets, details)
+            {
+                "id": pid,
+                "agent": agent.name,
+                "asn": asn,
+                "deploy_status": deploy_status,
+                "detail": detail,
+            }
+            for (pid, agent, asn, deploy_status, _proto), detail in zip(
+                targets, details, strict=True
+            )
         ],
     }

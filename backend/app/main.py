@@ -5,13 +5,13 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.orm import Session
+from starlette.middleware.sessions import SessionMiddleware
 
+from app.api.telegram import router as telegram_router
 from app.auth.kioubit import KioubitAuthError, KioubitVerifier
 from app.auth.service import consume_challenge, create_challenge, upsert_user_from_kioubit
 from app.auth.session import current_user, login_user, logout_user
-from app.api.telegram import router as telegram_router
 from app.config import get_settings
 from app.db.init_db import create_schema, seed_defaults
 from app.db.models import Agent, LGQuery, PeerRequest, User
@@ -321,7 +321,9 @@ def admin_delete_agent(
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
     if db.query(PeerRequest).filter(PeerRequest.agent_id == agent.id).first() is not None:
-        raise HTTPException(status_code=400, detail="Delete or move peers before deleting this agent")
+        raise HTTPException(
+            status_code=400, detail="Delete or move peers before deleting this agent"
+        )
     db.delete(agent)
     db.commit()
     return RedirectResponse("/admin", status_code=303)
@@ -404,7 +406,9 @@ def admin_delete_peer(
 
 
 @app.get("/admin/peers/{peer_id}/config", response_class=HTMLResponse)
-def admin_peer_config(peer_id: int, request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+def admin_peer_config(
+    peer_id: int, request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
     user = current_user(request, db)
     if user is None or not user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
@@ -478,7 +482,12 @@ async def looking_glass(
     return render(
         request,
         "index.html",
-        {"agents": agents, "lg_result": result_text, "lg_ok": ok, "last_query": normalized_query_type},
+        {
+            "agents": agents,
+            "lg_result": result_text,
+            "lg_ok": ok,
+            "last_query": normalized_query_type,
+        },
         user=user,
     )
 

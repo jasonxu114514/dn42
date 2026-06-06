@@ -8,7 +8,6 @@ import sys
 import threading
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parent
 BACKEND_DIR = ROOT / "backend"
 ENV_FILE = BACKEND_DIR / ".env"
@@ -116,7 +115,10 @@ def main() -> int:
     parser.add_argument(
         "--allow-http",
         action="store_true",
-        help="Start even when DOMAIN does not resolve to HTTPS. Telegram Web App verification will not work.",
+        help=(
+            "Start even when DOMAIN does not resolve to HTTPS. "
+            "Telegram Web App verification will not work."
+        ),
     )
     parser.add_argument(
         "--backend-only",

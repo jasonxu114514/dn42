@@ -18,7 +18,6 @@ from aiogram.types import (
 
 from app.config import get_settings
 
-
 settings = get_settings()
 
 WG_KEY_RE = re.compile(r"^[A-Za-z0-9+/]{43}=$")
@@ -135,9 +134,7 @@ def parse_peer_id(text: str | None) -> int | None:
 
 
 def peer_list_text(peers: list[dict]) -> str:
-    return "\n".join(
-        f"#{p['id']} {p['agent']} {p['status']} {p['endpoint']}" for p in peers
-    )
+    return "\n".join(f"#{p['id']} {p['agent']} {p['status']} {p['endpoint']}" for p in peers)
 
 
 def agent_keyboard(agents: list[dict]) -> ReplyKeyboardMarkup:
@@ -164,7 +161,9 @@ async def load_user_peers(message: Message) -> list[dict] | None:
         data = await backend.get(f"/api/telegram/peer/{message.from_user.id}")
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 404:
-            await message.answer("Your Telegram account is not linked to a dn42 ASN yet. Use /login first.")
+            await message.answer(
+                "Your Telegram account is not linked to a dn42 ASN yet. Use /login first."
+            )
         else:
             await message.answer(f"Could not load your peers: {detail_of(exc)}")
         return None
@@ -287,7 +286,9 @@ async def status_cmd(message: Message) -> None:
         return
     blocks = []
     for peer in peers:
-        header = f"=== #{peer['id']} {peer['agent']} (AS{peer['asn']}) [{peer['deploy_status']}] ==="
+        header = (
+            f"=== #{peer['id']} {peer['agent']} (AS{peer['asn']}) [{peer['deploy_status']}] ==="
+        )
         body = str(peer.get("detail", "")).strip() or "(no detail)"
         blocks.append(f"{header}\n{body}")
     for chunk in chunk_blocks(blocks):
@@ -368,7 +369,9 @@ async def create_cmd(message: Message, state: FSMContext) -> None:
         await backend.get(f"/api/telegram/peer/{message.from_user.id}")
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 404:
-            await message.answer("Your Telegram account is not linked to a dn42 ASN yet. Use /login first.")
+            await message.answer(
+                "Your Telegram account is not linked to a dn42 ASN yet. Use /login first."
+            )
         else:
             await message.answer(f"Could not start: {detail_of(exc)}")
         return
@@ -387,7 +390,9 @@ async def create_cmd(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(agents=[agent["name"] for agent in agents])
     await state.set_state(CreatePeer.agent)
-    await message.answer("Let's create a peer. Which PoP (agent)?", reply_markup=agent_keyboard(agents))
+    await message.answer(
+        "Let's create a peer. Which PoP (agent)?", reply_markup=agent_keyboard(agents)
+    )
 
 
 @dp.message(Command("edit"))
@@ -401,7 +406,10 @@ async def edit_cmd(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(peer_ids=[p["id"] for p in peers])
     await state.set_state(EditPeer.choosing)
-    await message.answer("Which peer do you want to edit?\n" + peer_list_text(peers), reply_markup=peer_keyboard(peers))
+    await message.answer(
+        "Which peer do you want to edit?\n" + peer_list_text(peers),
+        reply_markup=peer_keyboard(peers),
+    )
 
 
 @dp.message(Command("delete"))
@@ -415,7 +423,10 @@ async def delete_cmd(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(peer_ids=[p["id"] for p in peers])
     await state.set_state(DeletePeer.choosing)
-    await message.answer("Which peer do you want to delete?\n" + peer_list_text(peers), reply_markup=peer_keyboard(peers))
+    await message.answer(
+        "Which peer do you want to delete?\n" + peer_list_text(peers),
+        reply_markup=peer_keyboard(peers),
+    )
 
 
 # Create wizard steps
@@ -444,7 +455,9 @@ async def create_endpoint_step(message: Message, state: FSMContext) -> None:
         return
     endpoint = (message.text or "").strip()
     if not looks_like_endpoint(endpoint):
-        await message.answer("Endpoint must be host:port (e.g. 198.51.100.7:51820). Try again or /cancel.")
+        await message.answer(
+            "Endpoint must be host:port (e.g. 198.51.100.7:51820). Try again or /cancel."
+        )
         return
     await state.update_data(endpoint=endpoint)
     await state.set_state(CreatePeer.public_key)
@@ -504,7 +517,9 @@ async def edit_endpoint_step(message: Message, state: FSMContext) -> None:
         return
     endpoint = (message.text or "").strip()
     if not looks_like_endpoint(endpoint):
-        await message.answer("Endpoint must be host:port (e.g. 198.51.100.7:51820). Try again or /cancel.")
+        await message.answer(
+            "Endpoint must be host:port (e.g. 198.51.100.7:51820). Try again or /cancel."
+        )
         return
     await state.update_data(endpoint=endpoint)
     await state.set_state(EditPeer.public_key)

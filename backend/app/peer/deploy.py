@@ -42,7 +42,9 @@ def build_deploy_payload(peer: PeerRequest, agent: Agent, settings: Settings) ->
     }
 
 
-def deploy_peer(peer: PeerRequest, agent: Agent, settings: Settings, timeout: float = 20.0) -> dict[str, Any]:
+def deploy_peer(
+    peer: PeerRequest, agent: Agent, settings: Settings, timeout: float = 20.0
+) -> dict[str, Any]:
     if not agent.enabled:
         raise PeerDeployError("Agent is disabled")
     payload = build_deploy_payload(peer, agent, settings)

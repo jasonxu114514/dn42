@@ -48,7 +48,9 @@ def teardown_peer_request(peer: PeerRequest) -> None:
         peer.deploy_output = f"teardown failed: {exc}"
 
 
-def find_peer_on_pop(db, agent_id: int, asn: str, *, exclude_id: int | None = None) -> PeerRequest | None:
+def find_peer_on_pop(
+    db, agent_id: int, asn: str, *, exclude_id: int | None = None
+) -> PeerRequest | None:
     """Return the existing peer for (agent, asn) if any, optionally ignoring one peer id."""
     query = db.query(PeerRequest).filter(
         PeerRequest.agent_id == agent_id,
@@ -85,7 +87,9 @@ def create_peer(
     a duplicate or invalid input. The caller is responsible for committing the session.
     """
     if find_peer_on_pop(db, agent.id, user.primary_asn) is not None:
-        raise ValueError("You already have a peer on this PoP. Edit or delete the existing one instead.")
+        raise ValueError(
+            "You already have a peer on this PoP. Edit or delete the existing one instead."
+        )
     endpoint = normalize_endpoint(endpoint)
     wg_public_key = normalize_wireguard_key(wg_public_key)
     local_link_address = normalize_link_local_address(local_link_address)

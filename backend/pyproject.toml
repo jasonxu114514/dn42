@@ -16,6 +16,28 @@ dependencies = [
     "uvicorn[standard]>=0.30.0",
 ]
 
+[project.optional-dependencies]
+# Developer tooling. Install with `pip install -e ".[dev]"`.
+dev = [
+    "ruff>=0.15",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint]
+# E/F: pycodestyle + pyflakes (defaults), I: import sorting, UP: pyupgrade
+# (modernize for the py311 target), B: flake8-bugbear (likely-bug patterns).
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom intentionally calls these in argument
+# defaults (`db: Session = Depends(get_db)`, `x: str = Form(...)`), which is
+# safe; tell bugbear not to flag them as B008.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Form",
+    "fastapi.Header",
+    "fastapi.Query",
+]

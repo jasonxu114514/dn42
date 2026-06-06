@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session
 
 from app.db.models import User
 
-
 SESSION_USER_KEY = "user_id"
 
 

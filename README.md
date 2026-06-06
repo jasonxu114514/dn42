@@ -71,6 +71,15 @@ cd backend
 .\.venv\Scripts\python -m app.bot.main
 ```
 
+Or start the backend and Telegram bot together from the repository root:
+
+```powershell
+python start.py
+```
+
+Telegram Mini App verification requires `BASE_URL` to be a public `https://` URL. For local backend
+testing without Telegram verification, run `python start.py --allow-http`.
+
 ## Agent
 
 ```powershell

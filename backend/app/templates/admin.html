@@ -2,25 +2,48 @@
 {% block content %}
 <section class="panel">
   <h1>Admin</h1>
-  <h2>Peer Requests</h2>
+  <h2>Agents</h2>
+  <p class="muted">Control Plane: <code>{{ settings.base_url }}</code></p>
+  <form method="post" action="/admin/agents" class="grid-form">
+    <label>Name
+      <input name="name" placeholder="local" required>
+    </label>
+    <label>Location
+      <input name="location" placeholder="default">
+    </label>
+    <label>Agent API URL
+      <input name="url" placeholder="http://127.0.0.1:8080" required>
+    </label>
+    <label class="checkbox-label">
+      <input type="checkbox" name="enabled" checked>
+      Enabled
+    </label>
+    <button type="submit">Create Agent</button>
+  </form>
+  {% for agent in agents %}
+    <form id="agent-update-{{ agent.id }}" method="post" action="/admin/agents/{{ agent.id }}/update"></form>
+    <form id="agent-token-{{ agent.id }}" method="post" action="/admin/agents/{{ agent.id }}/reset-token"></form>
+    <form id="agent-delete-{{ agent.id }}" method="post" action="/admin/agents/{{ agent.id }}/delete"></form>
+  {% endfor %}
   <table>
-    <thead><tr><th>ID</th><th>ASN</th><th>Node</th><th>Endpoint</th><th>Our Address{% if settings.local_asn %} (AS{{ settings.local_asn }}){% endif %}</th><th>User Address</th><th>Status</th><th>Deploy</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Name</th><th>Location</th><th>Agent API URL</th><th>Token</th><th>Enabled</th><th>Actions</th></tr></thead>
     <tbody>
-      {% for peer in peers %}
+      {% for agent in agents %}
         <tr>
-          <td>#{{ peer.id }}</td>
-          <td>{{ peer.asn }}</td>
-          <td>{{ peer.node.name }}</td>
-          <td>{{ peer.endpoint }}</td>
-          <td>{{ peer.local_link_address }}</td>
-          <td>AS{{ peer.asn }}: {{ peer.peer_link_address }}</td>
-          <td>{{ peer.status }}</td>
-          <td title="{{ peer.deploy_output }}">{{ peer.deploy_status }}</td>
+          <td><input form="agent-update-{{ agent.id }}" name="name" value="{{ agent.name }}" required></td>
+          <td><input form="agent-update-{{ agent.id }}" name="location" value="{{ agent.location }}"></td>
+          <td><input form="agent-update-{{ agent.id }}" name="url" value="{{ agent.url }}" required></td>
+          <td><code class="token">{{ agent.token }}</code></td>
+          <td>
+            <label class="checkbox-label compact">
+              <input form="agent-update-{{ agent.id }}" type="checkbox" name="enabled" {% if agent.enabled %}checked{% endif %}>
+              Enabled
+            </label>
+          </td>
           <td class="actions">
-            <form method="post" action="/admin/peers/{{ peer.id }}/approve"><button>Approve</button></form>
-            <form method="post" action="/admin/peers/{{ peer.id }}/deploy"><button>Deploy</button></form>
-            <form method="post" action="/admin/peers/{{ peer.id }}/reject"><button>Reject</button></form>
-            <a href="/admin/peers/{{ peer.id }}/config">config</a>
+            <button form="agent-update-{{ agent.id }}" type="submit">Save</button>
+            <button form="agent-token-{{ agent.id }}" type="submit" class="secondary">Reset Token</button>
+            <button form="agent-delete-{{ agent.id }}" type="submit" class="danger">Delete</button>
           </td>
         </tr>
       {% endfor %}
@@ -29,12 +52,49 @@
 </section>
 
 <section class="panel">
-  <h2>Nodes</h2>
+  <h2>Peers</h2>
+  {% for peer in peers %}
+    <form id="peer-update-{{ peer.id }}" method="post" action="/admin/peers/{{ peer.id }}/update"></form>
+    <form id="peer-redeploy-{{ peer.id }}" method="post" action="/admin/peers/{{ peer.id }}/redeploy"></form>
+    <form id="peer-delete-{{ peer.id }}" method="post" action="/admin/peers/{{ peer.id }}/delete"></form>
+  {% endfor %}
   <table>
-    <thead><tr><th>Name</th><th>Location</th><th>Agent</th><th>Enabled</th></tr></thead>
+    <thead>
+      <tr>
+        <th>ID</th><th>ASN</th><th>Agent</th><th>Endpoint</th><th>WG Public Key</th>
+        <th>Our Address</th><th>Peer Address</th><th>Status</th><th>Deploy</th><th>Actions</th>
+      </tr>
+    </thead>
     <tbody>
-      {% for node in nodes %}
-        <tr><td>{{ node.name }}</td><td>{{ node.location }}</td><td>{{ node.agent_url }}</td><td>{{ node.enabled }}</td></tr>
+      {% for peer in peers %}
+        <tr>
+          <td>#{{ peer.id }}</td>
+          <td>{{ peer.asn }}</td>
+          <td>
+            <select form="peer-update-{{ peer.id }}" name="agent_id" required>
+              {% for agent in agents %}
+                <option value="{{ agent.id }}" {% if peer.agent_id == agent.id %}selected{% endif %}>{{ agent.name }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td><input form="peer-update-{{ peer.id }}" name="endpoint" value="{{ peer.endpoint }}" required></td>
+          <td><input form="peer-update-{{ peer.id }}" name="wg_public_key" value="{{ peer.wg_public_key }}" required></td>
+          <td><input form="peer-update-{{ peer.id }}" name="local_link_address" value="{{ peer.local_link_address }}" required></td>
+          <td><input form="peer-update-{{ peer.id }}" name="peer_link_address" value="{{ peer.peer_link_address }}" required></td>
+          <td>
+            <select form="peer-update-{{ peer.id }}" name="status">
+              <option value="approved" {% if peer.status == "approved" %}selected{% endif %}>approved</option>
+              <option value="disabled" {% if peer.status == "disabled" %}selected{% endif %}>disabled</option>
+            </select>
+          </td>
+          <td title="{{ peer.deploy_output }}">{{ peer.deploy_status }}</td>
+          <td class="actions">
+            <button form="peer-update-{{ peer.id }}" type="submit">Save</button>
+            <button form="peer-redeploy-{{ peer.id }}" type="submit" class="secondary">Redeploy</button>
+            <a href="/admin/peers/{{ peer.id }}/config">Config</a>
+            <button form="peer-delete-{{ peer.id }}" type="submit" class="danger">Delete</button>
+          </td>
+        </tr>
       {% endfor %}
     </tbody>
   </table>

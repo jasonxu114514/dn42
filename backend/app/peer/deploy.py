@@ -3,7 +3,7 @@ from typing import Any
 import httpx
 
 from app.config import Settings
-from app.db.models import Node, PeerRequest, utcnow
+from app.db.models import Agent, PeerRequest, utcnow
 from app.peer.config import (
     peer_protocol_name,
     render_bird_peer_config,
@@ -16,7 +16,7 @@ class PeerDeployError(Exception):
     pass
 
 
-def build_deploy_payload(peer: PeerRequest, node: Node, settings: Settings) -> dict[str, Any]:
+def build_deploy_payload(peer: PeerRequest, agent: Agent, settings: Settings) -> dict[str, Any]:
     local_asn = settings.local_asn.strip()
     if not local_asn:
         raise PeerDeployError("LOCAL_ASN is required before peers can be deployed")
@@ -31,22 +31,24 @@ def build_deploy_payload(peer: PeerRequest, node: Node, settings: Settings) -> d
     return {
         "request_id": peer.id,
         "asn": peer.asn,
-        "node": node.name,
-        "protocol_name": peer_protocol_name(peer, node),
+        "agent": agent.name,
+        "protocol_name": peer_protocol_name(peer, agent),
         "wireguard_config": render_wireguard_peer_config(
             peer,
-            node,
+            agent,
             settings.wireguard_private_key_placeholder,
         ),
-        "bird_config": render_bird_peer_config(peer, node, local_asn),
+        "bird_config": render_bird_peer_config(peer, agent, local_asn),
     }
 
 
-def deploy_peer(peer: PeerRequest, node: Node, settings: Settings, timeout: float = 20.0) -> dict[str, Any]:
-    payload = build_deploy_payload(peer, node, settings)
-    headers = {"Authorization": f"Bearer {node.agent_token}"} if node.agent_token else {}
+def deploy_peer(peer: PeerRequest, agent: Agent, settings: Settings, timeout: float = 20.0) -> dict[str, Any]:
+    if not agent.enabled:
+        raise PeerDeployError("Agent is disabled")
+    payload = build_deploy_payload(peer, agent, settings)
+    headers = {"Authorization": f"Bearer {agent.token}"} if agent.token else {}
     response = httpx.post(
-        f"{node.agent_url.rstrip('/')}/v1/peers/deploy",
+        f"{agent.url.rstrip('/')}/v1/peers/deploy",
         headers=headers,
         json=payload,
         timeout=timeout,

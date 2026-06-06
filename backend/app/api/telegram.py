@@ -14,7 +14,7 @@ from app.auth.service import (
     upsert_user_from_kioubit,
 )
 from app.config import get_settings
-from app.db.models import Node, PeerRequest
+from app.db.models import Agent, PeerRequest
 from app.db.session import get_db
 from app.lg.client import AgentClient
 
@@ -47,7 +47,7 @@ class LGRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     telegram_user_id: str = Field(pattern=r"^\d{1,20}$")
-    node: str = Field(default="local", pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    agent: str = Field(default="local", pattern=r"^[A-Za-z0-9_-]{1,64}$")
     query_type: Literal["ping", "mtr", "route", "status"]
     target: str = Field(default="", max_length=255)
 
@@ -116,7 +116,7 @@ def telegram_peer_status(telegram_user_id: str, db: Session = Depends(get_db)) -
         "peers": [
             {
                 "id": peer.id,
-                "node": peer.node.name,
+                "agent": peer.agent.name,
                 "status": peer.status,
                 "endpoint": peer.endpoint,
                 "created_at": peer.created_at.isoformat(),
@@ -131,14 +131,10 @@ async def telegram_lg(payload: LGRequest, db: Session = Depends(get_db)) -> dict
     user = get_user_by_telegram(db, payload.telegram_user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Telegram account is not verified")
-    node = (
-        db.query(Node)
-        .filter(Node.name == payload.node, Node.enabled.is_(True))
-        .one_or_none()
-    )
-    if node is None:
-        raise HTTPException(status_code=404, detail="Node not found")
+    agent = db.query(Agent).filter(Agent.name == payload.agent, Agent.enabled.is_(True)).one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
     try:
-        return await AgentClient().query(node, payload.query_type, payload.target)
+        return await AgentClient().query(agent, payload.query_type, payload.target)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

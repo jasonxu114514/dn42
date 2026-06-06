@@ -1,3 +1,5 @@
+import secrets
+
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -11,7 +13,7 @@ from app.auth.session import current_user, login_user, logout_user
 from app.api.telegram import router as telegram_router
 from app.config import get_settings
 from app.db.init_db import create_schema, seed_defaults
-from app.db.models import LGQuery, Node, PeerRequest, utcnow
+from app.db.models import Agent, LGQuery, PeerRequest, utcnow
 from app.db.session import SessionLocal, get_db
 from app.lg.client import AgentClient
 from app.lg.validation import validate_query_type, validate_target
@@ -51,8 +53,8 @@ def render(request: Request, name: str, context: dict | None = None) -> HTMLResp
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
-    nodes = db.query(Node).filter(Node.enabled.is_(True)).order_by(Node.name).all()
-    return render(request, "index.html", {"nodes": nodes})
+    agents = query_enabled_agents(db).all()
+    return render(request, "index.html", {"agents": agents})
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -112,7 +114,7 @@ def portal(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     user = current_user(request, db)
     if user is None:
         return RedirectResponse("/login", status_code=303)
-    nodes = db.query(Node).filter(Node.enabled.is_(True)).order_by(Node.name).all()
+    agents = query_enabled_agents(db).all()
     peers = (
         db.query(PeerRequest)
         .filter(PeerRequest.user_id == user.id)
@@ -131,7 +133,7 @@ def portal(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
         request,
         "portal.html",
         {
-            "nodes": nodes,
+            "agents": agents,
             "peers": peers,
             "default_local_link_address": default_local_link_address,
             "default_peer_link_address": default_peer_link_address,
@@ -142,7 +144,7 @@ def portal(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
 @app.post("/portal/peers")
 def create_peer_request(
     request: Request,
-    node_id: int = Form(...),
+    agent_id: int = Form(...),
     endpoint: str = Form(...),
     wg_public_key: str = Form(...),
     local_link_address: str = Form(...),
@@ -152,9 +154,9 @@ def create_peer_request(
     user = current_user(request, db)
     if user is None:
         return RedirectResponse("/login", status_code=303)
-    node = db.query(Node).filter(Node.id == node_id, Node.enabled.is_(True)).one_or_none()
-    if node is None:
-        raise HTTPException(status_code=400, detail="Unknown node")
+    agent = query_enabled_agents(db).filter(Agent.id == agent_id).one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=400, detail="Unknown or disabled agent")
     if len(wg_public_key.strip()) < 32:
         raise HTTPException(status_code=400, detail="WireGuard public key looks too short")
     try:
@@ -165,18 +167,17 @@ def create_peer_request(
     peer = PeerRequest(
         user_id=user.id,
         asn=user.primary_asn,
-        node_id=node.id,
+        agent_id=agent.id,
         endpoint=endpoint.strip(),
         wg_public_key=wg_public_key.strip(),
         local_link_address=local_link_address,
         peer_link_address=peer_link_address,
-        status="approved" if settings.auto_approve_peers else "pending",
+        status="approved",
     )
-    peer.node = node
+    peer.agent = agent
     db.add(peer)
     db.flush()
-    if settings.auto_approve_peers and settings.auto_deploy_on_approval:
-        deploy_peer_request(peer)
+    deploy_peer_request(peer)
     db.commit()
     return RedirectResponse("/portal", status_code=303)
 
@@ -194,7 +195,7 @@ def peer_config(peer_id: int, request: Request, db: Session = Depends(get_db)) -
         "config.html",
         {
             "title": f"Peer #{peer.id} config",
-            "config": render_user_config(peer, peer.node, settings.local_asn or "<our-asn>"),
+            "config": render_user_config(peer, peer.agent, settings.local_asn or "<our-asn>"),
         },
     )
 
@@ -204,38 +205,183 @@ def admin(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     user = current_user(request, db)
     if user is None or not user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
+    agents = db.query(Agent).order_by(Agent.name).all()
     peers = db.query(PeerRequest).order_by(PeerRequest.created_at.desc()).all()
-    nodes = db.query(Node).order_by(Node.name).all()
-    return render(request, "admin.html", {"peers": peers, "nodes": nodes})
+    return render(request, "admin.html", {"agents": agents, "peers": peers})
 
 
-@app.post("/admin/peers/{peer_id}/{action}")
-def admin_peer_action(
-    peer_id: int,
-    action: str,
+@app.post("/admin/agents")
+def admin_create_agent(
+    request: Request,
+    name: str = Form(...),
+    location: str = Form(""),
+    url: str = Form(...),
+    enabled: str | None = Form(None),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    user = current_user(request, db)
+    if user is None or not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    name = name.strip()
+    url = url.strip()
+    if not name or not url:
+        raise HTTPException(status_code=400, detail="Agent name and URL are required")
+    if db.query(Agent).filter(Agent.name == name).one_or_none() is not None:
+        raise HTTPException(status_code=400, detail="Agent name already exists")
+    db.add(
+        Agent(
+            name=name,
+            location=location.strip(),
+            url=url,
+            token=secrets.token_urlsafe(32),
+            enabled=enabled == "on",
+        )
+    )
+    db.commit()
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/agents/{agent_id}/update")
+def admin_update_agent(
+    agent_id: int,
+    request: Request,
+    name: str = Form(...),
+    location: str = Form(""),
+    url: str = Form(...),
+    enabled: str | None = Form(None),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    user = current_user(request, db)
+    if user is None or not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    name = name.strip()
+    url = url.strip()
+    if not name or not url:
+        raise HTTPException(status_code=400, detail="Agent name and URL are required")
+    existing = db.query(Agent).filter(Agent.name == name, Agent.id != agent.id).one_or_none()
+    if existing is not None:
+        raise HTTPException(status_code=400, detail="Agent name already exists")
+    agent.name = name
+    agent.location = location.strip()
+    agent.url = url
+    agent.enabled = enabled == "on"
+    db.commit()
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/agents/{agent_id}/reset-token")
+def admin_reset_agent_token(
+    agent_id: int,
     request: Request,
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     user = current_user(request, db)
     if user is None or not user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
-    if action not in {"approve", "reject", "deploy"}:
-        raise HTTPException(status_code=400, detail="Unsupported action")
+    agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    agent.token = secrets.token_urlsafe(32)
+    db.commit()
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/agents/{agent_id}/delete")
+def admin_delete_agent(
+    agent_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    user = current_user(request, db)
+    if user is None or not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if db.query(PeerRequest).filter(PeerRequest.agent_id == agent.id).first() is not None:
+        raise HTTPException(status_code=400, detail="Delete or move peers before deleting this agent")
+    db.delete(agent)
+    db.commit()
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/peers/{peer_id}/update")
+def admin_update_peer(
+    peer_id: int,
+    request: Request,
+    agent_id: int = Form(...),
+    endpoint: str = Form(...),
+    wg_public_key: str = Form(...),
+    local_link_address: str = Form(...),
+    peer_link_address: str = Form(...),
+    status: str = Form("approved"),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    user = current_user(request, db)
+    if user is None or not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
     peer = db.query(PeerRequest).filter(PeerRequest.id == peer_id).one_or_none()
     if peer is None:
-        raise HTTPException(status_code=404, detail="Peer request not found")
-    if action == "reject":
-        peer.status = "rejected"
-        peer.deploy_status = "not_deployed"
-    elif action == "approve":
-        peer.status = "approved"
-        if settings.auto_deploy_on_approval:
-            deploy_peer_request(peer)
-    elif action == "deploy":
-        if peer.status != "approved":
-            raise HTTPException(status_code=400, detail="Only approved peers can be deployed")
-        deploy_peer_request(peer)
+        raise HTTPException(status_code=404, detail="Peer not found")
+    agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=400, detail="Unknown agent")
+    if status not in {"approved", "disabled"}:
+        raise HTTPException(status_code=400, detail="Unsupported peer status")
+    if len(wg_public_key.strip()) < 32:
+        raise HTTPException(status_code=400, detail="WireGuard public key looks too short")
+    try:
+        local_link_address = normalize_link_local_address(local_link_address)
+        peer_link_address = normalize_link_local_address(peer_link_address)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    peer.agent_id = agent.id
+    peer.agent = agent
+    peer.endpoint = endpoint.strip()
+    peer.wg_public_key = wg_public_key.strip()
+    peer.local_link_address = local_link_address
+    peer.peer_link_address = peer_link_address
+    peer.status = status
     peer.updated_at = utcnow()
+    db.commit()
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/peers/{peer_id}/redeploy")
+def admin_redeploy_peer(
+    peer_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    user = current_user(request, db)
+    if user is None or not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    peer = db.query(PeerRequest).filter(PeerRequest.id == peer_id).one_or_none()
+    if peer is None:
+        raise HTTPException(status_code=404, detail="Peer not found")
+    if peer.status != "approved":
+        raise HTTPException(status_code=400, detail="Only approved peers can be deployed")
+    deploy_peer_request(peer)
+    db.commit()
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/peers/{peer_id}/delete")
+def admin_delete_peer(
+    peer_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    user = current_user(request, db)
+    if user is None or not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    peer = db.query(PeerRequest).filter(PeerRequest.id == peer_id).one_or_none()
+    if peer is None:
+        raise HTTPException(status_code=404, detail="Peer not found")
+    db.delete(peer)
     db.commit()
     return RedirectResponse("/admin", status_code=303)
 
@@ -247,13 +393,13 @@ def admin_peer_config(peer_id: int, request: Request, db: Session = Depends(get_
         raise HTTPException(status_code=403, detail="Admin access required")
     peer = db.query(PeerRequest).filter(PeerRequest.id == peer_id).one_or_none()
     if peer is None:
-        raise HTTPException(status_code=404, detail="Peer request not found")
+        raise HTTPException(status_code=404, detail="Peer not found")
     return render(
         request,
         "config.html",
         {
-            "title": f"Operator config for request #{peer.id}",
-            "config": render_operator_config(peer, peer.node, settings.local_asn or "<our-asn>"),
+            "title": f"Operator config for peer #{peer.id}",
+            "config": render_operator_config(peer, peer.agent, settings.local_asn or "<our-asn>"),
         },
     )
 
@@ -263,7 +409,7 @@ def deploy_peer_request(peer: PeerRequest) -> None:
     peer.deploy_output = ""
     peer.updated_at = utcnow()
     try:
-        result = deploy_peer(peer, peer.node, settings)
+        result = deploy_peer(peer, peer.agent, settings)
         apply_deploy_result(peer, result)
     except Exception as exc:
         peer.deploy_status = "failed"
@@ -275,14 +421,14 @@ def deploy_peer_request(peer: PeerRequest) -> None:
 @app.post("/lg", response_class=HTMLResponse)
 async def looking_glass(
     request: Request,
-    node_id: int = Form(...),
+    agent_id: int = Form(...),
     query_type: str = Form(...),
     target: str = Form(""),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    node = db.query(Node).filter(Node.id == node_id, Node.enabled.is_(True)).one_or_none()
-    if node is None:
-        raise HTTPException(status_code=400, detail="Unknown node")
+    agent = query_enabled_agents(db).filter(Agent.id == agent_id).one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=400, detail="Unknown or disabled agent")
     result_text = ""
     ok = False
     normalized_query_type = query_type
@@ -290,7 +436,7 @@ async def looking_glass(
     try:
         normalized_query_type = validate_query_type(query_type)
         normalized_target = validate_target(normalized_query_type, target)
-        result = await AgentClient().query(node, normalized_query_type, normalized_target)
+        result = await AgentClient().query(agent, normalized_query_type, normalized_target)
         ok = bool(result.get("ok", False))
         result_text = str(result.get("output", result))
     except Exception as exc:
@@ -299,7 +445,7 @@ async def looking_glass(
     db.add(
         LGQuery(
             user_id=user.id if user else None,
-            node_id=node.id,
+            agent_id=agent.id,
             query_type=normalized_query_type,
             target=normalized_target,
             ok=ok,
@@ -307,9 +453,13 @@ async def looking_glass(
         )
     )
     db.commit()
-    nodes = db.query(Node).filter(Node.enabled.is_(True)).order_by(Node.name).all()
+    agents = query_enabled_agents(db).all()
     return render(
         request,
         "index.html",
-        {"nodes": nodes, "lg_result": result_text, "lg_ok": ok, "last_query": normalized_query_type},
+        {"agents": agents, "lg_result": result_text, "lg_ok": ok, "last_query": normalized_query_type},
     )
+
+
+def query_enabled_agents(db: Session):
+    return db.query(Agent).filter(Agent.enabled.is_(True)).order_by(Agent.name)

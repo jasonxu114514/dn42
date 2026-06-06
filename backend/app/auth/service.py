@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.db.models import ASNIdentity, AuthChallenge, TelegramBinding, User, utcnow
+from app.peer.validation import normalize_asn_number
 
 
 def create_challenge(
@@ -55,7 +56,10 @@ def upsert_user_from_kioubit(db: Session, data: dict[str, Any], settings: Settin
         user = User(primary_asn=asn)
         db.add(user)
     user.first_email = data.get("first_email") or user.first_email
-    user.is_admin = asn in settings.admin_asn_set
+    try:
+        user.is_admin = normalize_asn_number(asn) == normalize_asn_number(settings.local_asn)
+    except ValueError:
+        user.is_admin = False
     user.last_login_at = utcnow()
     db.commit()
     db.refresh(user)

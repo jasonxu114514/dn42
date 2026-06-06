@@ -43,6 +43,10 @@ a {
   color: var(--accent);
 }
 
+.muted {
+  color: var(--muted);
+}
+
 main {
   width: min(1100px, calc(100vw - 32px));
   margin: 24px auto;
@@ -102,6 +106,16 @@ button {
   cursor: pointer;
 }
 
+button.secondary {
+  background: var(--panel);
+  color: var(--accent);
+}
+
+button.danger {
+  background: var(--bad);
+  border-color: var(--bad);
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -114,14 +128,37 @@ td {
   text-align: left;
 }
 
+td input,
+td select {
+  width: 100%;
+  min-width: 130px;
+}
+
 .actions {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
-.actions form {
-  margin: 0;
+.compact {
+  min-width: 96px;
+}
+
+.token {
+  display: inline-block;
+  max-width: 220px;
+  overflow-wrap: anywhere;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkbox-label input {
+  min-height: auto;
 }
 
 .terminal {

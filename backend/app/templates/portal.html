@@ -4,10 +4,10 @@
   <h1>User Portal</h1>
   <p>Authenticated as AS{{ user.primary_asn }}.</p>
   <form method="post" action="/portal/peers" class="grid-form">
-    <label>Node
-      <select name="node_id">
-        {% for node in nodes %}
-          <option value="{{ node.id }}">{{ node.name }}</option>
+    <label>Agent
+      <select name="agent_id">
+        {% for agent in agents %}
+          <option value="{{ agent.id }}">{{ agent.name }}{% if agent.location %} - {{ agent.location }}{% endif %}</option>
         {% endfor %}
       </select>
     </label>
@@ -28,15 +28,15 @@
 </section>
 
 <section class="panel">
-  <h2>Your Peer Requests</h2>
+  <h2>Your Peers</h2>
   <table>
-    <thead><tr><th>ID</th><th>ASN</th><th>Node</th><th>Status</th><th>Deploy</th><th>Config</th></tr></thead>
+    <thead><tr><th>ID</th><th>ASN</th><th>Agent</th><th>Status</th><th>Deploy</th><th>Config</th></tr></thead>
     <tbody>
       {% for peer in peers %}
         <tr>
           <td>#{{ peer.id }}</td>
           <td>{{ peer.asn }}</td>
-          <td>{{ peer.node.name }}</td>
+          <td>{{ peer.agent.name }}</td>
           <td>{{ peer.status }}</td>
           <td>{{ peer.deploy_status }}</td>
           <td><a href="/portal/peers/{{ peer.id }}/config">view</a></td>

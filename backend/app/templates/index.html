@@ -3,10 +3,10 @@
 <section class="panel">
   <h1>Looking Glass</h1>
   <form method="post" action="/lg" class="grid-form">
-    <label>Node
-      <select name="node_id">
-        {% for node in nodes %}
-          <option value="{{ node.id }}">{{ node.name }}{% if node.location %} - {{ node.location }}{% endif %}</option>
+    <label>Agent
+      <select name="agent_id">
+        {% for agent in agents %}
+          <option value="{{ agent.id }}">{{ agent.name }}{% if agent.location %} - {{ agent.location }}{% endif %}</option>
         {% endfor %}
       </select>
     </label>

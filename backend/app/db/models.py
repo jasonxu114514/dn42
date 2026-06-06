@@ -66,15 +66,16 @@ class TelegramBinding(Base):
     user: Mapped[User] = relationship(back_populates="telegram_bindings")
 
 
-class Node(Base):
-    __tablename__ = "nodes"
+class Agent(Base):
+    __tablename__ = "agents"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     location: Mapped[str] = mapped_column(String(128), default="")
-    agent_url: Mapped[str] = mapped_column(String(512))
-    agent_token: Mapped[str] = mapped_column(String(255), default="")
+    url: Mapped[str] = mapped_column(String(512))
+    token: Mapped[str] = mapped_column(String(255), default="")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class PeerRequest(Base):
@@ -83,7 +84,7 @@ class PeerRequest(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     asn: Mapped[str] = mapped_column(String(32), index=True)
-    node_id: Mapped[int] = mapped_column(ForeignKey("nodes.id"), index=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id"), index=True)
     tunnel_type: Mapped[str] = mapped_column(String(32), default="wireguard")
     endpoint: Mapped[str] = mapped_column(String(255))
     wg_public_key: Mapped[str] = mapped_column(String(128))
@@ -97,7 +98,7 @@ class PeerRequest(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
-    node: Mapped[Node] = relationship()
+    agent: Mapped[Agent] = relationship()
 
 
 class LGQuery(Base):
@@ -105,7 +106,7 @@ class LGQuery(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    node_id: Mapped[int] = mapped_column(ForeignKey("nodes.id"), index=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id"), index=True)
     query_type: Mapped[str] = mapped_column(String(32))
     target: Mapped[str] = mapped_column(String(255))
     ok: Mapped[bool] = mapped_column(Boolean, default=False)

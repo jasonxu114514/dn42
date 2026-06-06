@@ -33,7 +33,7 @@ type Result struct {
 type DeployRequest struct {
 	RequestID       int    `json:"request_id"`
 	ASN             string `json:"asn"`
-	Node            string `json:"node"`
+	Agent           string `json:"agent"`
 	ProtocolName    string `json:"protocol_name"`
 	WireGuardConfig string `json:"wireguard_config"`
 	BirdConfig      string `json:"bird_config"`
@@ -216,7 +216,7 @@ func (r Runner) Status() Result {
 
 func (r Runner) DeployPeer(req DeployRequest) DeployResult {
 	req.ASN = strings.TrimSpace(req.ASN)
-	req.Node = strings.TrimSpace(req.Node)
+	req.Agent = strings.TrimSpace(req.Agent)
 	req.ProtocolName = strings.TrimSpace(req.ProtocolName)
 	req.WireGuardConfig = strings.TrimSpace(req.WireGuardConfig)
 	req.BirdConfig = strings.TrimSpace(req.BirdConfig)
@@ -284,8 +284,8 @@ func validateDeployRequest(req DeployRequest) error {
 	if req.ASN == "" || len(req.ASN) > 32 || hasUnsafeTargetChar(req.ASN) {
 		return errors.New("invalid asn")
 	}
-	if req.Node == "" || len(req.Node) > 64 || strings.ContainsAny(req.Node, "/\\") {
-		return errors.New("invalid node")
+	if req.Agent == "" || len(req.Agent) > 64 || strings.ContainsAny(req.Agent, "/\\") {
+		return errors.New("invalid agent")
 	}
 	if !safeNameRE.MatchString(req.ProtocolName) {
 		return errors.New("invalid protocol_name")

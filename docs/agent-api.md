@@ -56,7 +56,7 @@ Body:
 {
   "request_id": 12,
   "asn": "4242420000",
-  "node": "local",
+  "agent": "local",
   "protocol_name": "dn42p12",
   "wireguard_config": "[Interface]\nPrivateKey = {{WIREGUARD_PRIVATE_KEY}}\nListenPort = 20090\n",
   "bird_config": "protocol bgp dn42p12 { ... }\n"

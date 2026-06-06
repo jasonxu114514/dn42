@@ -56,11 +56,11 @@ async def help_cmd(message: Message) -> None:
     await message.answer(
         "dn42 autopeer bot\n\n"
         "/verify - link your dn42 ASN\n"
-        "/peer - show your peer requests\n"
-        "/status [node] - show node status\n"
-        "/ping <dn42-ip> [node]\n"
-        "/mtr <dn42-ip> [node]\n"
-        "/route <dn42-prefix|dn42-ip> [node]"
+        "/peer - show your peers\n"
+        "/status [agent] - show agent status\n"
+        "/ping <dn42-ip> [agent]\n"
+        "/mtr <dn42-ip> [agent]\n"
+        "/route <dn42-prefix|dn42-ip> [agent]"
     )
 
 
@@ -128,34 +128,34 @@ async def peer_cmd(message: Message) -> None:
         return
 
     if not result["peers"]:
-        await message.answer(f"AS{result['asn']} has no peer requests yet.")
+        await message.answer(f"AS{result['asn']} has no peers yet.")
         return
-    lines = [f"AS{result['asn']} peer requests:"]
+    lines = [f"AS{result['asn']} peers:"]
     for peer in result["peers"]:
-        lines.append(f"#{peer['id']} {peer['node']} {peer['status']} {peer['endpoint']}")
+        lines.append(f"#{peer['id']} {peer['agent']} {peer['status']} {peer['endpoint']}")
     await message.answer("\n".join(lines))
 
 
 def parse_lg_args(message: Message, default_query: str) -> tuple[str, str, str]:
     parts = (message.text or "").split()
     if default_query == "status":
-        node = parts[1] if len(parts) > 1 else "local"
-        return default_query, "", node
+        agent = parts[1] if len(parts) > 1 else "local"
+        return default_query, "", agent
     if len(parts) < 2:
         raise ValueError("Missing target")
     target = parts[1]
-    node = parts[2] if len(parts) > 2 else "local"
-    return default_query, target, node
+    agent = parts[2] if len(parts) > 2 else "local"
+    return default_query, target, agent
 
 
 async def run_lg(message: Message, query_type: str) -> None:
     try:
-        query_type, target, node = parse_lg_args(message, query_type)
+        query_type, target, agent = parse_lg_args(message, query_type)
         result = await backend.post(
             "/api/telegram/lg",
             {
                 "telegram_user_id": str(message.from_user.id),
-                "node": node,
+                "agent": agent,
                 "query_type": query_type,
                 "target": target,
             },

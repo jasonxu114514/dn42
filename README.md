@@ -1,6 +1,6 @@
 # dn42 Autopeer MVP
 
-Python control plane + Go node agent for a dn42 autopeer and looking glass service.
+Python control plane + Go agent for a dn42 autopeer and looking glass service.
 
 This first version includes:
 
@@ -8,14 +8,14 @@ This first version includes:
 - Kioubit.dn42 authentication for ASN ownership
 - Telegram Mini App verification flow
 - Telegram bot commands for peer status and LG queries
-- Go node agent for `ping`, `mtr`, `birdc show route`, `birdc show protocols`, and peer config deployment
+- Go agent for `ping`, `mtr`, `birdc show route`, `birdc show protocols`, and peer config deployment
 - SQLite by default for local testing
 
 ## Layout
 
 ```text
 backend/      Python FastAPI control plane, WebUI, Telegram bot
-agent/        Go node agent for router-side commands
+agent/        Go agent for router-side commands
 deploy/       systemd examples
 docs/         notes and API flow
 ```
@@ -42,21 +42,27 @@ Important `.env` values:
 BASE_URL=https://your-service.example
 AUTH_DOMAIN=your-service.example
 SESSION_SECRET=<random secret>
-ADMIN_ASNS=424242xxxx
 LOCAL_ASN=424242xxxx
-AUTO_APPROVE_PEERS=false
-AUTO_DEPLOY_ON_APPROVAL=true
 TELEGRAM_BOT_TOKEN=<from BotFather>
-TELEGRAM_BACKEND_SECRET=<shared secret>
+TELEGRAM_BACKEND_SECRET=<random shared secret>
 DEFAULT_AGENT_URL=http://127.0.0.1:8080
-DEFAULT_AGENT_TOKEN=<agent bearer token>
 ```
 
-Peer requests can be fully automated by setting `AUTO_APPROVE_PEERS=true`. Local and remote
-peer addresses are requested in the portal and default to link-local addresses generated from
-ASNs: `4242420099` becomes `fe80::99`, and `4242421260` becomes `fe80::1260`. When a peer is
-approved, the backend calls the selected node agent and posts generated WireGuard and BIRD
-configs to `/v1/peers/deploy`.
+`LOCAL_ASN` is both the local BGP ASN and the ASN that receives admin access after Kioubit
+authentication. `TELEGRAM_BACKEND_SECRET` is a random shared secret used only between the Telegram
+bot and backend; set the same value for both processes. You can generate one with
+`python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+
+Local and remote peer addresses are requested in the portal and default to link-local addresses
+generated from ASNs: `4242420099` becomes `fe80::99`, and `4242421260` becomes `fe80::1260`.
+Peer creation is fully automatic: the backend immediately approves the peer, calls the selected
+agent, and posts generated WireGuard and BIRD configs to `/v1/peers/deploy`.
+
+The control plane talks directly to agents: `Backend -> Agent`. Create each controlled router as
+an Agent in the admin panel with its display name, location, and Agent API URL. The backend
+generates the agent bearer token automatically. The admin panel also shows the configured control
+plane URL (`BASE_URL`) as read-only reference. Looking glass, peer creation, and deployment only
+use enabled agents.
 
 Run the Telegram bot:
 
@@ -107,10 +113,8 @@ listen port is derived from the remote ASN's last five digits, so `4242420090` l
 ```text
 /verify
 /peer
-/status [node]
-/ping <dn42-ip> [node]
-/mtr <dn42-ip> [node]
-/route <dn42-prefix|dn42-ip> [node]
+/status [agent]
+/ping <dn42-ip> [agent]
+/mtr <dn42-ip> [agent]
+/route <dn42-prefix|dn42-ip> [agent]
 ```
-
-Admin actions are intentionally Web-only.

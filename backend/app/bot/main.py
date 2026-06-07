@@ -25,6 +25,7 @@ from aiogram.types import (
 )
 
 from app.config import get_settings
+from app.peer.validation import normalize_asn_number
 
 settings = get_settings()
 
@@ -88,8 +89,27 @@ class DeletePeer(StatesGroup):
     confirming = State()
 
 
+def admin_asn_display() -> str:
+    """The operator/admin ASN, formatted ``AS<number>`` (or a placeholder if unset/invalid).
+
+    A Telegram user is granted admin rights when their verified ASN equals ``settings.local_asn``
+    (see ``upsert_user_from_kioubit``), so that value *is* the admin ASN. ``LOCAL_ASN`` may be
+    configured with or without an ``AS`` prefix, so normalise it for a consistent display.
+    管理員 ASN 即 settings.local_asn:使用者通過驗證的 ASN 與其相同時才取得管理員權限。
+    LOCAL_ASN 可能帶或不帶 AS 前綴,故正規化後統一以 AS<number> 顯示。
+    """
+    raw = settings.local_asn.strip()
+    if not raw:
+        return "(not configured)"
+    try:
+        return f"AS{normalize_asn_number(raw)}"
+    except ValueError:
+        return raw
+
+
 HELP_TEXT = (
-    "dn42 autopeer bot\n\n"
+    "dn42 autopeer bot\n"
+    f"Admin ASN: {admin_asn_display()}\n\n"
     "/login - Login your dn42 ASN\n"
     "/logout - Logout your dn42 ASN\n"
     "/listpeers - Show your peers status\n"

@@ -83,7 +83,7 @@ def render_user_config(peer: PeerRequest, agent: Agent, local_asn: str = "<our-a
 [Peer]
 PublicKey = {our_public_key}
 Endpoint = {agent_wireguard_endpoint(peer, agent)}
-AllowedIPs = 172.16.0.0/12, fd00::/8
+AllowedIPs = 10.0.0.0/8, 172.20.0.0/14, 172.31.0.0/16, fd00::/8, fe80::/64
 PersistentKeepalive = 25
 
 # BGP
@@ -111,7 +111,7 @@ PostUp = ip addr add {post_up_address(peer)} dev %i
 Endpoint = {peer.endpoint}
 PersistentKeepalive = 15
 PublicKey = {peer.wg_public_key}
-AllowedIPs = 172.20.0.0/14,fd00::/8
+AllowedIPs = 10.0.0.0/8, 172.20.0.0/14, 172.31.0.0/16, fd00::/8, fe80::/64
 """
 
 

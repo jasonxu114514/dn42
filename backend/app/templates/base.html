@@ -3,25 +3,48 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ settings.app_name }}</title>
+  <title>{% block title %}{{ settings.app_name }}{% endblock %}</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/">{{ settings.app_name }}</a>
-    <nav>
-      <a href="/">Looking Glass</a>
-      {% if user %}
-        <a href="/portal">Portal</a>
-        {% if user.is_admin %}<a href="/admin">Admin</a>{% endif %}
-        <a href="/logout">Logout AS{{ user.primary_asn }}</a>
-      {% else %}
-        <a href="/login">Login</a>
-      {% endif %}
-    </nav>
+    <div class="topbar-inner">
+      <a class="brand" href="/">{{ settings.app_name }}</a>
+      <nav class="topnav">
+        <a href="/" class="navlink {{ 'active' if active == 'lg' else '' }}">Looking Glass</a>
+        {% if user %}
+          <a href="/portal" class="navlink {{ 'active' if active == 'portal' else '' }}">Portal</a>
+          {% if user.is_admin %}
+            <a href="/admin" class="navlink {{ 'active' if active == 'admin' else '' }}">Admin</a>
+          {% endif %}
+        {% endif %}
+      </nav>
+      <div class="topbar-user">
+        {% if user %}
+          <span class="user-chip">AS{{ user.primary_asn }}{% if user.is_admin %} <span class="badge badge-ok">admin</span>{% endif %}</span>
+          <a class="btn btn-ghost btn-sm" href="/logout">Logout</a>
+        {% else %}
+          <a class="btn btn-primary btn-sm" href="/login">Login</a>
+        {% endif %}
+      </div>
+    </div>
   </header>
-  <main>
+
+  {% if flashes %}
+  <div class="flash-area">
+    {% for f in flashes %}
+      <div class="flash flash-{{ f.category }}" role="alert">
+        <span>{{ f.message }}</span>
+        <button type="button" class="flash-close" aria-label="Dismiss">&times;</button>
+      </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <main class="main">
     {% block content %}{% endblock %}
   </main>
+
+  <script src="/static/app.js" defer></script>
 </body>
 </html>

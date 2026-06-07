@@ -1,0 +1,57 @@
+{% extends "admin/layout.html" %}
+{% from "macros.html" import page_header, deploy_badge %}
+{% block title %}Peers · {{ settings.app_name }}{% endblock %}
+{% block admin %}
+{{ page_header("Peers", "Edit, redeploy, or remove any peer across all PoPs.") }}
+<div class="card">
+  {% if peers %}
+  {% for peer in peers %}
+    <form id="peer-update-{{ peer.id }}" method="post" action="/admin/peers/{{ peer.id }}/update"></form>
+    <form id="peer-redeploy-{{ peer.id }}" method="post" action="/admin/peers/{{ peer.id }}/redeploy"></form>
+    <form id="peer-delete-{{ peer.id }}" method="post" action="/admin/peers/{{ peer.id }}/delete" data-confirm="Delete peer #{{ peer.id }} (AS{{ peer.asn }})? This tears it down on the router."></form>
+  {% endfor %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th><th>ASN</th><th>Agent</th><th>Endpoint</th><th>WG public key</th>
+          <th>Our addr</th><th>Peer addr</th><th>Status</th><th>Deploy</th><th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for peer in peers %}
+        <tr>
+          <td>#{{ peer.id }}</td>
+          <td class="mono nowrap">AS{{ peer.asn }}</td>
+          <td>
+            <select form="peer-update-{{ peer.id }}" name="agent_id" required>
+              {% for agent in agents %}<option value="{{ agent.id }}" {% if peer.agent_id == agent.id %}selected{% endif %}>{{ agent.name }}</option>{% endfor %}
+            </select>
+          </td>
+          <td><input form="peer-update-{{ peer.id }}" name="endpoint" value="{{ peer.endpoint }}" required></td>
+          <td><input form="peer-update-{{ peer.id }}" name="wg_public_key" value="{{ peer.wg_public_key }}" required></td>
+          <td><input form="peer-update-{{ peer.id }}" name="local_link_address" value="{{ peer.local_link_address }}" required></td>
+          <td><input form="peer-update-{{ peer.id }}" name="peer_link_address" value="{{ peer.peer_link_address }}" required></td>
+          <td>
+            <select form="peer-update-{{ peer.id }}" name="status">
+              <option value="approved" {% if peer.status == "approved" %}selected{% endif %}>approved</option>
+              <option value="disabled" {% if peer.status == "disabled" %}selected{% endif %}>disabled</option>
+            </select>
+          </td>
+          <td class="nowrap" title="{{ peer.deploy_output }}">{{ deploy_badge(peer.deploy_status) }}</td>
+          <td class="row-actions">
+            <button form="peer-update-{{ peer.id }}" type="submit" class="btn-primary btn-sm">Save</button>
+            <button form="peer-redeploy-{{ peer.id }}" type="submit" class="btn-secondary btn-sm">Redeploy</button>
+            <a href="/admin/peers/{{ peer.id }}/config" class="btn btn-ghost btn-sm">Config</a>
+            <button form="peer-delete-{{ peer.id }}" type="submit" class="btn-danger btn-sm">Delete</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">No peers yet.</div>
+  {% endif %}
+</div>
+{% endblock %}

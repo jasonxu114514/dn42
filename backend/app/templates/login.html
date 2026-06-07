@@ -1,8 +1,9 @@
 {% extends "base.html" %}
+{% block title %}Login · {{ settings.app_name }}{% endblock %}
 {% block content %}
-<section class="panel narrow">
+<section class="card center-card">
   <h1>Authenticate</h1>
-  <p>Use Kioubit.dn42 to prove control of your dn42 ASN.</p>
+  <p class="muted">Use Kioubit.dn42 to prove control of your dn42 ASN, then you'll be signed in to the portal.</p>
   <script src="/static/kioubit-auth-button.js"></script>
   <kioubit-auth-btn return="{{ return_url }}" token="{{ token }}"></kioubit-auth-btn>
 </section>

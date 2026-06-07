@@ -117,3 +117,8 @@ class LGQuery(Base):
     ok: Mapped[bool] = mapped_column(Boolean, default=False)
     result: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    # Read-only convenience relationships for the admin audit log (joinedload avoids N+1 queries).
+    # user_id is nullable (public queries), so the user relationship may be None.
+    agent: Mapped["Agent"] = relationship()
+    user: Mapped["User | None"] = relationship()

@@ -6,7 +6,7 @@ the user inline rather than via the require_admin dependency.
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.auth.session import current_user
 from app.db.models import Agent, PeerRequest
@@ -14,7 +14,7 @@ from app.db.session import get_db
 from app.peer.config import peering_info, render_user_config
 from app.peer.service import create_peer
 from app.peer.validation import asn_link_local_address
-from app.web.deps import query_enabled_agents, render, settings
+from app.web.deps import flash, query_enabled_agents, render, settings
 
 router = APIRouter()
 
@@ -25,8 +25,10 @@ def portal(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     if user is None:
         return RedirectResponse("/login", status_code=303)
     agents = query_enabled_agents(db).all()
+    # joinedload the agent so the template's peer.agent access does not lazy-load per row (N+1).
     peers = (
         db.query(PeerRequest)
+        .options(joinedload(PeerRequest.agent))
         .filter(PeerRequest.user_id == user.id)
         .order_by(PeerRequest.created_at.desc())
         .all()
@@ -44,13 +46,23 @@ def portal(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
         "portal.html",
         {
             "agents": agents,
-            # Pair each peer with the "our side" details so the template can show them inline once
-            # the peer is deployed. 把每個 peer 與「我方」參數配對,部署成功後於頁面就地顯示。
-            "peers": [{"peer": peer, "peering": peering_info(peer, peer.agent)} for peer in peers],
+            # Pair each peer with the "our side" details so the template can show them inline, but
+            # only compute them for deployed peers (the only ones that display them).
+            # 僅對已部署的 peer 計算「我方」參數,因為只有它們會顯示。
+            "peers": [
+                {
+                    "peer": peer,
+                    "peering": peering_info(peer, peer.agent)
+                    if peer.deploy_status == "deployed"
+                    else None,
+                }
+                for peer in peers
+            ],
             "default_local_link_address": default_local_link_address,
             "default_peer_link_address": default_peer_link_address,
         },
         user=user,
+        active="portal",
     )
 
 
@@ -69,7 +81,8 @@ def create_peer_request(
         return RedirectResponse("/login", status_code=303)
     agent = query_enabled_agents(db).filter(Agent.id == agent_id).one_or_none()
     if agent is None:
-        raise HTTPException(status_code=400, detail="Unknown or disabled agent")
+        flash(request, "Unknown or disabled agent.", "error")
+        return RedirectResponse("/portal", status_code=303)
     try:
         create_peer(
             db,
@@ -82,8 +95,11 @@ def create_peer_request(
             settings=settings,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # Surface validation/duplicate errors as a flash banner instead of a raw JSON 400.
+        flash(request, str(exc), "error")
+        return RedirectResponse("/portal", status_code=303)
     db.commit()
+    flash(request, "Peer created and deployment requested.", "success")
     return RedirectResponse("/portal", status_code=303)
 
 
@@ -100,7 +116,10 @@ def peer_config(peer_id: int, request: Request, db: Session = Depends(get_db)) -
         "config.html",
         {
             "title": f"Peer #{peer.id} config",
+            "subtitle": f"Your generated WireGuard config for AS{peer.asn} on {peer.agent.name}.",
             "config": render_user_config(peer, peer.agent, settings.local_asn or "<our-asn>"),
+            "back_url": "/portal",
         },
         user=user,
+        active="portal",
     )

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+{% set path = request.url.path %}
+<div class="admin-shell">
+  <aside class="sidebar">
+    <span class="sidebar-label">Admin</span>
+    <a href="/admin" class="{{ 'active' if path == '/admin' else '' }}">Overview</a>
+    <a href="/admin/agents" class="{{ 'active' if path.startswith('/admin/agents') else '' }}">Agents</a>
+    <a href="/admin/peers" class="{{ 'active' if path.startswith('/admin/peers') else '' }}">Peers</a>
+    <a href="/admin/users" class="{{ 'active' if path.startswith('/admin/users') else '' }}">Users</a>
+    <a href="/admin/lg-log" class="{{ 'active' if path.startswith('/admin/lg-log') else '' }}">Looking-glass log</a>
+  </aside>
+  <div class="admin-content">
+    {% block admin %}{% endblock %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,65 @@
+{% extends "admin/layout.html" %}
+{% from "macros.html" import page_header, stat_card, deploy_badge, badge %}
+{% block title %}Admin · {{ settings.app_name }}{% endblock %}
+{% block admin %}
+{{ page_header("Overview", "Control plane: " ~ settings.base_url) }}
+
+<div class="stat-grid">
+  {{ stat_card("Agents (PoPs)", stats.agents_enabled, stats.agents_total ~ " total", "accent", "/admin/agents") }}
+  {{ stat_card("Peers", stats.peers_total, stats.peers_deployed ~ " deployed", "ok", "/admin/peers") }}
+  {{ stat_card("Failed deploys", stats.peers_failed, "need attention" if stats.peers_failed else "all healthy", "bad" if stats.peers_failed else "ok", "/admin/peers") }}
+  {{ stat_card("Users", stats.users_total, stats.users_admin ~ " admin", "neutral", "/admin/users") }}
+  {{ stat_card("LG queries", stats.lg_total, "audit log", "neutral", "/admin/lg-log") }}
+</div>
+
+{% if failed_peers %}
+<div class="card">
+  <div class="section-title"><h2>Needs attention — failed deploys</h2></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Peer</th><th>ASN</th><th>PoP</th><th>Output</th><th></th></tr></thead>
+      <tbody>
+        {% for peer in failed_peers %}
+        <tr>
+          <td>#{{ peer.id }}</td>
+          <td class="mono">AS{{ peer.asn }}</td>
+          <td>{{ peer.agent.name }}</td>
+          <td><span class="truncate" title="{{ peer.deploy_output }}">{{ peer.deploy_output or "—" }}</span></td>
+          <td class="nowrap"><a href="/admin/peers">manage →</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="split-2">
+  <div class="card">
+    <div class="section-title"><h2>Recent peers</h2><a href="/admin/peers" class="btn btn-ghost btn-sm">All</a></div>
+    {% if recent_peers %}
+    <ul class="activity-list">
+      {% for peer in recent_peers %}
+      <li>
+        <span>#{{ peer.id }} · <span class="mono">AS{{ peer.asn }}</span> @ {{ peer.agent.name }}</span>
+        <span>{{ deploy_badge(peer.deploy_status) }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}<div class="empty-state">No peers yet.</div>{% endif %}
+  </div>
+  <div class="card">
+    <div class="section-title"><h2>Recent LG queries</h2><a href="/admin/lg-log" class="btn btn-ghost btn-sm">All</a></div>
+    {% if recent_queries %}
+    <ul class="activity-list">
+      {% for q in recent_queries %}
+      <li>
+        <span class="mono truncate" title="{{ q.query_type }} {{ q.target }}">{{ q.query_type }} {{ q.target or "" }}</span>
+        <span>{{ badge("ok", "ok") if q.ok else badge("fail", "bad") }} {{ q.agent.name if q.agent else "?" }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}<div class="empty-state">No queries yet.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}

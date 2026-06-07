@@ -1,10 +1,12 @@
 """Public looking glass: rate-limited ping/trace/route/status queries dispatched to an agent.
 
-Every query (and its outcome) is logged to the LGQuery table for audit.
+Every query (and its outcome) is logged to the LGQuery table for audit. Browsers submitting the
+form get the full page back; the in-page ``fetch`` (header ``X-Requested-With: fetch``) gets a small
+JSON payload so the result can be swapped in without a reload.
 """
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from sqlalchemy.orm import Session
 
 from app.auth.session import current_user
@@ -24,7 +26,7 @@ async def looking_glass(
     query_type: str = Form(...),
     target: str = Form(""),
     db: Session = Depends(get_db),
-) -> HTMLResponse:
+) -> Response:
     if not lg_rate_limiter.allow(client_ip(request)):
         raise HTTPException(
             status_code=429,
@@ -69,6 +71,11 @@ async def looking_glass(
         )
     )
     db.commit()
+
+    # In-page fetch: return just the outcome as JSON so app.js can swap it in without a reload.
+    if request.headers.get("x-requested-with", "").lower() == "fetch":
+        return JSONResponse({"ok": ok, "output": result_text, "query_type": normalized_query_type})
+
     agents = query_enabled_agents(db).all()
     return render(
         request,
@@ -78,6 +85,8 @@ async def looking_glass(
             "lg_result": result_text,
             "lg_ok": ok,
             "last_query": normalized_query_type,
+            "last_target": normalized_target,
         },
         user=user,
+        active="lg",
     )

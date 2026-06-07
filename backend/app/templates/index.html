@@ -1,30 +1,36 @@
 {% extends "base.html" %}
+{% from "macros.html" import page_header, code_block %}
+{% block title %}Looking Glass · {{ settings.app_name }}{% endblock %}
 {% block content %}
-<section class="panel">
-  <h1>Looking Glass</h1>
-  <form method="post" action="/lg" class="grid-form">
-    <label>Agent
+<div class="card">
+  {{ page_header("Looking Glass", "Run ping, traceroute, route, and BGP-status queries from any PoP.") }}
+  {% if agents %}
+  <form id="lg-form" method="post" action="/lg" class="form-grid">
+    <label class="field">Agent (PoP)
       <select name="agent_id">
         {% for agent in agents %}
-          <option value="{{ agent.id }}">{{ agent.name }}{% if agent.location %} - {{ agent.location }}{% endif %}</option>
+          <option value="{{ agent.id }}">{{ agent.name }}{% if agent.location %} — {{ agent.location }}{% endif %}</option>
         {% endfor %}
       </select>
     </label>
-    <label>Query
+    <label class="field">Query
       <select name="query_type">
-        <option value="ping">ping</option>
-        <option value="trace">traceroute</option>
-        <option value="route">route</option>
-        <option value="status">status</option>
+        {% for q in ["ping", "trace", "route", "status"] %}
+          <option value="{{ q }}" {% if last_query == q %}selected{% endif %}>{{ "traceroute" if q == "trace" else q }}</option>
+        {% endfor %}
       </select>
     </label>
-    <label>Target
-      <input name="target" placeholder="IP, hostname, or prefix — e.g. 172.20.0.1, wiki.dn42, 1.1.1.0/24">
+    <label class="field">Target
+      <input name="target" value="{{ last_target or '' }}"
+             placeholder="IP, hostname, or prefix — e.g. 172.20.0.1, wiki.dn42, 1.1.1.0/24">
     </label>
-    <button type="submit">Run</button>
+    <button type="submit" class="btn-primary">Run query</button>
   </form>
-  {% if lg_result %}
-    <pre class="terminal {% if lg_ok %}ok{% else %}bad{% endif %}">{{ lg_result }}</pre>
+  <div id="lg-result" class="lg-result">
+    {% if lg_result %}{{ code_block(lg_result, ok=lg_ok) }}{% endif %}
+  </div>
+  {% else %}
+  <div class="empty-state">No looking-glass PoPs are configured yet.</div>
   {% endif %}
-</section>
+</div>
 {% endblock %}

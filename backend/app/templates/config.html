@@ -1,7 +1,12 @@
 {% extends "base.html" %}
+{% from "macros.html" import page_header, code_block %}
+{% block title %}{{ title }} · {{ settings.app_name }}{% endblock %}
 {% block content %}
-<section class="panel">
-  <h1>{{ title }}</h1>
-  <pre class="terminal">{{ config }}</pre>
-</section>
+<div class="card">
+  {{ page_header(title, subtitle if subtitle is defined else None) }}
+  {{ code_block(config) }}
+  {% if back_url is defined and back_url %}
+  <p style="margin-top:16px"><a class="btn btn-ghost btn-sm" href="{{ back_url }}">← Back</a></p>
+  {% endif %}
+</div>
 {% endblock %}

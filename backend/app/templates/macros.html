@@ -1,0 +1,61 @@
+{#
+  Reusable presentation macros shared by every page.
+  - badge / status_badge / deploy_badge / bool_pill: coloured pills for states
+  - stat_card: dashboard metric card
+  - page_header: title + optional subtitle
+  - code_block: <pre> with a copy button (multi-line configs)
+  - copy_button: standalone copy button (short values like tokens/keys)
+  - pagination: prev / page-of / next pager
+#}
+
+{% macro badge(text, tone="neutral") %}<span class="badge badge-{{ tone }}">{{ text }}</span>{% endmacro %}
+
+{% macro status_badge(status) %}
+  {%- set tones = {"approved": "ok", "disabled": "bad", "pending": "warn"} -%}
+  {{ badge(status, tones.get(status, "neutral")) }}
+{%- endmacro %}
+
+{% macro deploy_badge(status) %}
+  {%- set tones = {"deployed": "ok", "failed": "bad", "deploying": "warn"} -%}
+  {{ badge(status.replace("_", " "), tones.get(status, "neutral")) }}
+{%- endmacro %}
+
+{% macro bool_pill(value, on="yes", off="no") %}
+  {{ badge(on, "ok") if value else badge(off, "neutral") }}
+{%- endmacro %}
+
+{% macro stat_card(label, value, sub=None, tone="neutral", href=None) %}
+  {% if href %}<a class="stat-card stat-{{ tone }}" href="{{ href }}">{% else %}<div class="stat-card stat-{{ tone }}">{% endif %}
+    <div class="stat-value">{{ value }}</div>
+    <div class="stat-label">{{ label }}</div>
+    {% if sub %}<div class="stat-sub">{{ sub }}</div>{% endif %}
+  {% if href %}</a>{% else %}</div>{% endif %}
+{%- endmacro %}
+
+{% macro page_header(title, subtitle=None) %}
+<div class="page-header">
+  <h1>{{ title }}</h1>
+  {% if subtitle %}<p class="muted">{{ subtitle }}</p>{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro code_block(content, ok=None) %}
+<div class="codewrap">
+  <button type="button" class="copy-btn" data-copy-target=".codewrap pre">Copy</button>
+  <pre class="terminal{% if ok is true %} ok{% elif ok is false %} bad{% endif %}">{{ content }}</pre>
+</div>
+{%- endmacro %}
+
+{% macro copy_button(text, label="Copy") %}<button type="button" class="copy-btn copy-inline" data-copy="{{ text }}">{{ label }}</button>{% endmacro %}
+
+{% macro pagination(pg, base_path) %}
+{% if pg.pages > 1 %}
+<nav class="pager">
+  {% if pg.has_prev %}<a class="btn btn-ghost btn-sm" href="{{ base_path }}?page={{ pg.page - 1 }}">← Prev</a>
+  {% else %}<span class="btn btn-ghost btn-sm disabled">← Prev</span>{% endif %}
+  <span class="pager-info">Page {{ pg.page }} of {{ pg.pages }} · {{ pg.total }} total</span>
+  {% if pg.has_next %}<a class="btn btn-ghost btn-sm" href="{{ base_path }}?page={{ pg.page + 1 }}">Next →</a>
+  {% else %}<span class="btn btn-ghost btn-sm disabled">Next →</span>{% endif %}
+</nav>
+{% endif %}
+{%- endmacro %}

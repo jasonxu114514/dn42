@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,14 +8,17 @@
   <script src="/static/kioubit-auth-button.js"></script>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body class="centered">
-  <div id="ui" class="panel narrow">
-    <h1>Telegram Verification</h1>
-    <kioubit-auth-btn return="{{ return_url }}" token="{{ token }}"></kioubit-auth-btn>
-  </div>
-  <div id="loader" class="panel narrow hidden">
-    <p>Sending data back to bot...</p>
-  </div>
+<body>
+  <main class="main">
+    <div id="ui" class="card center-card">
+      <h1>Telegram Verification</h1>
+      <p class="muted">Verify your dn42 ASN to link it with your Telegram account.</p>
+      <kioubit-auth-btn return="{{ return_url }}" token="{{ token }}"></kioubit-auth-btn>
+    </div>
+    <div id="loader" class="card center-card" style="display:none">
+      <p>Sending data back to the bot…</p>
+    </div>
+  </main>
   <script>
     const tg = window.Telegram.WebApp;
     tg.ready();

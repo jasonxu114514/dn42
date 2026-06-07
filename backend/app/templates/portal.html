@@ -1,59 +1,87 @@
 {% extends "base.html" %}
+{% from "macros.html" import page_header, status_badge, deploy_badge, copy_button %}
+{% block title %}Portal · {{ settings.app_name }}{% endblock %}
 {% block content %}
-<section class="panel">
-  <h1>User Portal</h1>
-  <p>Authenticated as AS{{ user.primary_asn }}.</p>
-  <form method="post" action="/portal/peers" class="grid-form">
-    <label>Agent
+<div class="card">
+  {{ page_header("User Portal", "Signed in as AS" ~ user.primary_asn ~ ". Request and manage your peerings.") }}
+</div>
+
+<div class="card">
+  <h2>Request a peer</h2>
+  {% if agents %}
+  <form method="post" action="/portal/peers" class="form-grid">
+    <label class="field">Agent (PoP)
       <select name="agent_id">
         {% for agent in agents %}
-          <option value="{{ agent.id }}">{{ agent.name }}{% if agent.location %} - {{ agent.location }}{% endif %}</option>
+          <option value="{{ agent.id }}">{{ agent.name }}{% if agent.location %} — {{ agent.location }}{% endif %}</option>
         {% endfor %}
       </select>
     </label>
-    <label>Endpoint
+    <label class="field">Your WireGuard endpoint
       <input name="endpoint" placeholder="host:port" required>
     </label>
-    <label>WireGuard public key
-      <input name="wg_public_key" required>
+    <label class="field">Your WireGuard public key
+      <input name="wg_public_key" placeholder="44-char base64 key" required>
     </label>
-    <label>Our address{% if settings.local_asn %} (AS{{ settings.local_asn }}){% endif %}
+    <label class="field">Our address{% if settings.local_asn %} (AS{{ settings.local_asn }}){% endif %}
       <input name="local_link_address" value="{{ default_local_link_address }}" placeholder="fe80::1260" required>
     </label>
-    <label>Your address (AS{{ user.primary_asn }})
+    <label class="field">Your address (AS{{ user.primary_asn }})
       <input name="peer_link_address" value="{{ default_peer_link_address }}" placeholder="fe80::99" required>
     </label>
-    <button type="submit">Request Peer</button>
+    <button type="submit" class="btn-primary">Request peer</button>
   </form>
-</section>
+  {% else %}
+  <div class="empty-state">No PoPs are available right now. Please check back later.</div>
+  {% endif %}
+</div>
 
-<section class="panel">
-  <h2>Your Peers</h2>
-  <table>
-    <thead><tr><th>ID</th><th>ASN</th><th>Agent</th><th>Status</th><th>Deploy</th><th>Config</th></tr></thead>
-    <tbody>
-      {% for item in peers %}
-        {% set peer = item.peer %}
-        <tr>
-          <td>#{{ peer.id }}</td>
-          <td>{{ peer.asn }}</td>
-          <td>{{ peer.agent.name }}</td>
-          <td>{{ peer.status }}</td>
-          <td>{{ peer.deploy_status }}</td>
-          <td><a href="/portal/peers/{{ peer.id }}/config">view</a></td>
-        </tr>
-        {% if peer.deploy_status == "deployed" %}
-          <tr class="peer-detail">
+<div class="card">
+  <div class="section-title"><h2>Your peers</h2></div>
+  {% if peers %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>ID</th><th>ASN</th><th>PoP</th><th>Status</th><th>Deploy</th><th>Config</th></tr>
+      </thead>
+      <tbody>
+        {% for item in peers %}
+          {% set peer = item.peer %}
+          <tr>
+            <td>#{{ peer.id }}</td>
+            <td class="mono">AS{{ peer.asn }}</td>
+            <td>{{ peer.agent.name }}</td>
+            <td>{{ status_badge(peer.status) }}</td>
+            <td>{{ deploy_badge(peer.deploy_status) }}</td>
+            <td><a href="/portal/peers/{{ peer.id }}/config">view</a></td>
+          </tr>
+          {% if item.peering %}
+          <tr class="detail-row">
             <td colspan="6">
-              <p class="muted">Configure your side with our details:</p>
-              <pre class="peering">Endpoint   = {{ item.peering.endpoint }}
-PublicKey  = {{ item.peering.public_key }}
-Our tunnel IP (your BGP neighbor) = {{ item.peering.tunnel_ip }}</pre>
+              <p class="muted">Tunnel is up — configure your side with our details:</p>
+              <div class="kv">
+                <div class="kv-row">
+                  <span class="kv-key">Endpoint</span>
+                  <span class="kv-val">{{ item.peering.endpoint }}</span>{{ copy_button(item.peering.endpoint) }}
+                </div>
+                <div class="kv-row">
+                  <span class="kv-key">Our public key</span>
+                  <span class="kv-val">{{ item.peering.public_key }}</span>{{ copy_button(item.peering.public_key) }}
+                </div>
+                <div class="kv-row">
+                  <span class="kv-key">Our tunnel IP (your BGP neighbor)</span>
+                  <span class="kv-val">{{ item.peering.tunnel_ip }}</span>{{ copy_button(item.peering.tunnel_ip) }}
+                </div>
+              </div>
             </td>
           </tr>
-        {% endif %}
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
+          {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">You have no peers yet. Request one above.</div>
+  {% endif %}
+</div>
 {% endblock %}

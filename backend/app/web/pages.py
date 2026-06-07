@@ -16,7 +16,9 @@ router = APIRouter()
 @router.get("/", response_class=HTMLResponse)
 def home(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     agents = query_enabled_agents(db).all()
-    return render(request, "index.html", {"agents": agents}, user=current_user(request, db))
+    return render(
+        request, "index.html", {"agents": agents}, user=current_user(request, db), active="lg"
+    )
 
 
 @router.get("/login", response_class=HTMLResponse)

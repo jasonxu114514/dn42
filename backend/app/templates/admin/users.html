@@ -1,0 +1,48 @@
+{% extends "admin/layout.html" %}
+{% from "macros.html" import page_header, bool_pill %}
+{% block title %}Users · {{ settings.app_name }}{% endblock %}
+{% block admin %}
+{{ page_header("Users", "Everyone who has authenticated via Kioubit.dn42.") }}
+<div class="card">
+  {% if users %}
+  {% for u in users %}
+    <form id="user-admin-{{ u.id }}" method="post" action="/admin/users/{{ u.id }}/toggle-admin" data-confirm="Change admin status for AS{{ u.primary_asn }}?"></form>
+    <form id="user-tg-{{ u.id }}" method="post" action="/admin/users/{{ u.id }}/unlink-telegram" data-confirm="Unlink Telegram from AS{{ u.primary_asn }}? Their peers are kept."></form>
+  {% endfor %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>ASN</th><th>Email</th><th>Admin</th><th>Peers</th><th>Telegram</th><th>Created</th><th>Last login</th><th>Actions</th></tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td class="mono nowrap">AS{{ u.primary_asn }}</td>
+          <td>{{ u.first_email or "—" }}</td>
+          <td>{{ bool_pill(u.is_admin, "admin", "user") }}</td>
+          <td>{{ peer_counts.get(u.id, 0) }}</td>
+          <td class="mono">
+            {% if u.telegram_bindings %}
+              {% for b in u.telegram_bindings %}{% if b.username %}@{{ b.username }}{% else %}{{ b.telegram_user_id }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}
+            {% else %}<span class="faint">—</span>{% endif %}
+          </td>
+          <td class="faint nowrap">{{ u.created_at.strftime("%Y-%m-%d") if u.created_at else "—" }}</td>
+          <td class="faint nowrap">{{ u.last_login_at.strftime("%Y-%m-%d %H:%M") if u.last_login_at else "never" }}</td>
+          <td class="row-actions">
+            {% if u.id == user.id %}
+              <span class="btn btn-ghost btn-sm disabled" title="You can't change your own admin status">{{ "Demote" if u.is_admin else "Make admin" }}</span>
+            {% else %}
+              <button form="user-admin-{{ u.id }}" type="submit" class="btn-secondary btn-sm">{{ "Demote" if u.is_admin else "Make admin" }}</button>
+            {% endif %}
+            {% if u.telegram_bindings %}<button form="user-tg-{{ u.id }}" type="submit" class="btn-danger btn-sm">Unlink TG</button>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">No users yet.</div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -4,6 +4,71 @@
 {% block admin %}
 {{ page_header("Peers", "Edit, redeploy, or remove any peer across all PoPs.") }}
 <div class="card">
+  <h2>Add peer</h2>
+  {% if agents %}
+  <form id="admin-add-peer-form" method="post" action="/admin/peers" class="form-grid">
+    <label class="field">Peer ASN
+      <input
+        id="admin-peer-asn"
+        name="asn"
+        placeholder="4242420099"
+        inputmode="numeric"
+        autocomplete="off"
+        required
+      >
+    </label>
+    <label class="field">Agent (PoP)
+      <select name="agent_id" required>
+        {% for agent in agents %}
+          <option value="{{ agent.id }}">
+            {{ agent.name }}
+            {%- if agent.location %} - {{ agent.location }}{% endif -%}
+            {%- if not agent.enabled %} (disabled){% endif -%}
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">WireGuard endpoint
+      <input name="endpoint" placeholder="host:port" required>
+    </label>
+    <label class="field">WireGuard public key
+      <input name="wg_public_key" placeholder="44-char base64 key" required>
+    </label>
+    <label class="field">WireGuard MTU
+      <input
+        name="wg_mtu"
+        type="number"
+        min="{{ wireguard_mtu_min }}"
+        max="{{ wireguard_mtu_max }}"
+        value="{{ default_wireguard_mtu }}"
+        required
+      >
+    </label>
+    <label class="field">
+      Our address{% if settings.local_asn %} (AS{{ settings.local_asn }}){% endif %}
+      <input
+        name="local_link_address"
+        value="{{ default_local_link_address }}"
+        placeholder="fe80::1260"
+        required
+      >
+    </label>
+    <label class="field">Peer address
+      <input
+        id="admin-peer-link-address"
+        name="peer_link_address"
+        placeholder="fe80::99"
+        required
+      >
+    </label>
+    <button type="submit" class="btn-primary">Create peer</button>
+  </form>
+  {% else %}
+  <div class="empty-state">No PoPs are configured yet. Create an agent first.</div>
+  {% endif %}
+</div>
+
+<div class="card">
   {% if peers %}
   {% for peer in peers %}
     <form id="peer-update-{{ peer.id }}" method="post" action="/admin/peers/{{ peer.id }}/update"></form>

@@ -66,6 +66,42 @@
     }, 300);
   }
 
+  function peerLinkLocalFromAsn(value) {
+    var asn = (value || "").trim().toUpperCase();
+    if (asn.indexOf("AS") === 0) asn = asn.slice(2);
+    if (!/^\d+$/.test(asn)) return "";
+    var suffix;
+    if (asn.length < 4) {
+      suffix = asn;
+    } else if (asn.indexOf("424242") === 0) {
+      suffix = asn.slice(6);
+    } else {
+      suffix = asn.slice(-4);
+    }
+    suffix = suffix.replace(/^0+/, "") || "0";
+    return "fe80::" + suffix.toLowerCase();
+  }
+
+  function setupAdminPeerForm() {
+    var asnInput = document.getElementById("admin-peer-asn");
+    var addrInput = document.getElementById("admin-peer-link-address");
+    if (!asnInput || !addrInput) return;
+
+    function maybeFillPeerAddress() {
+      var next = peerLinkLocalFromAsn(asnInput.value);
+      var previous = addrInput.dataset.autofilledValue || "";
+      if (!next) return;
+      if (!addrInput.value.trim() || addrInput.value.trim() === previous) {
+        addrInput.value = next;
+        addrInput.dataset.autofilledValue = next;
+      }
+    }
+
+    asnInput.addEventListener("input", maybeFillPeerAddress);
+    asnInput.addEventListener("change", maybeFillPeerAddress);
+    maybeFillPeerAddress();
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     // Copy buttons: literal `data-copy`, or the <pre> inside the button's `.codewrap`.
     document.addEventListener("click", function (e) {
@@ -136,6 +172,8 @@
           });
       });
     }
+
+    setupAdminPeerForm();
 
     // Flash banners: close button always; auto-dismiss non-errors after a few seconds.
     document.addEventListener("click", function (e) {

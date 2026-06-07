@@ -14,12 +14,24 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.auth.service import unbind_telegram
-from app.db.models import Agent, LGQuery, PeerRequest, TelegramBinding, User
+from app.db.models import ASNIdentity, Agent, LGQuery, PeerRequest, TelegramBinding, User
 from app.db.session import get_db
 from app.peer.config import render_operator_config
 from app.peer.deploy import fetch_agent_public_key
-from app.peer.service import delete_peer, deploy_peer_request, update_peer
-from app.peer.validation import DEFAULT_WIREGUARD_MTU, MAX_WIREGUARD_MTU, MIN_WIREGUARD_MTU
+from app.peer.service import (
+    create_peer,
+    delete_peer,
+    deploy_peer_request,
+    find_peer_on_pop,
+    update_peer,
+)
+from app.peer.validation import (
+    DEFAULT_WIREGUARD_MTU,
+    MAX_WIREGUARD_MTU,
+    MIN_WIREGUARD_MTU,
+    asn_link_local_address,
+    normalize_asn_number,
+)
 from app.web.deps import Pagination, flash, render, require_admin, settings
 
 router = APIRouter()
@@ -105,6 +117,10 @@ def admin_peers(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     agents = db.query(Agent).order_by(Agent.name).all()
+    try:
+        default_local_link_address = asn_link_local_address(settings.local_asn)
+    except ValueError:
+        default_local_link_address = ""
     # joinedload the agent so the per-row peer.agent access does not lazy-load (N+1).
     peers = (
         db.query(PeerRequest)
@@ -118,6 +134,7 @@ def admin_peers(
         {
             "agents": agents,
             "peers": peers,
+            "default_local_link_address": default_local_link_address,
             "default_wireguard_mtu": DEFAULT_WIREGUARD_MTU,
             "wireguard_mtu_min": MIN_WIREGUARD_MTU,
             "wireguard_mtu_max": MAX_WIREGUARD_MTU,
@@ -315,6 +332,74 @@ def admin_delete_agent(
 
 
 # --------------------------------------------------------------------------- peers (POST)
+
+
+@router.post("/admin/peers")
+def admin_create_peer(
+    request: Request,
+    asn: str = Form(...),
+    agent_id: int = Form(...),
+    endpoint: str = Form(...),
+    wg_public_key: str = Form(...),
+    wg_mtu: str | None = Form(None),
+    local_link_address: str = Form(...),
+    peer_link_address: str = Form(...),
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+) -> RedirectResponse:
+    try:
+        asn_number = normalize_asn_number(asn)
+    except ValueError as exc:
+        flash(request, str(exc), "error")
+        return RedirectResponse("/admin/peers", status_code=303)
+    agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
+    if agent is None:
+        flash(request, "Unknown agent.", "error")
+        return RedirectResponse("/admin/peers", status_code=303)
+    duplicate = find_peer_on_pop(db, agent.id, asn_number)
+    if duplicate is not None:
+        flash(
+            request,
+            f"AS{asn_number} already has peer #{duplicate.id} on {agent.name}.",
+            "error",
+        )
+        return RedirectResponse("/admin/peers", status_code=303)
+    user = db.query(User).filter(User.primary_asn == asn_number).one_or_none()
+    if user is None:
+        try:
+            is_admin = asn_number == normalize_asn_number(settings.local_asn)
+        except ValueError:
+            is_admin = False
+        user = User(primary_asn=asn_number, is_admin=is_admin)
+        db.add(user)
+        db.flush()
+        db.add(ASNIdentity(user_id=user.id, asn=asn_number, authtype="admin-manual"))
+    try:
+        peer = create_peer(
+            db,
+            user=user,
+            agent=agent,
+            endpoint=endpoint,
+            wg_public_key=wg_public_key,
+            wg_mtu=wg_mtu,
+            local_link_address=local_link_address,
+            peer_link_address=peer_link_address,
+            settings=settings,
+        )
+    except ValueError as exc:
+        flash(request, str(exc), "error")
+        return RedirectResponse("/admin/peers", status_code=303)
+    db.commit()
+    if peer.deploy_status == "deployed":
+        flash(request, f"Peer #{peer.id} for AS{asn_number} created and deployed.", "success")
+    else:
+        flash(
+            request,
+            f"Peer #{peer.id} for AS{asn_number} created, deploy failed: "
+            f"{peer.deploy_output[:200]}",
+            "error",
+        )
+    return RedirectResponse("/admin/peers", status_code=303)
 
 
 @router.post("/admin/peers/{peer_id}/update")

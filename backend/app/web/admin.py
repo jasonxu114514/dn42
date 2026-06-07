@@ -121,6 +121,26 @@ def admin_agents(
     )
 
 
+@router.get("/admin/agents/{agent_id}/edit", response_class=HTMLResponse)
+def admin_agent_edit(
+    agent_id: int,
+    request: Request,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    runtime = agent_runtime_context([agent])[agent.id]
+    return render(
+        request,
+        "admin/agent_edit.html",
+        {"agent": agent, "runtime": runtime},
+        user=user,
+        active="admin",
+    )
+
+
 @router.get("/admin/peers", response_class=HTMLResponse)
 def admin_peers(
     request: Request,
@@ -146,6 +166,37 @@ def admin_peers(
             "agents": agents,
             "peers": peers,
             "default_local_link_address": default_local_link_address,
+            "default_wireguard_mtu": DEFAULT_WIREGUARD_MTU,
+            "wireguard_mtu_min": MIN_WIREGUARD_MTU,
+            "wireguard_mtu_max": MAX_WIREGUARD_MTU,
+        },
+        user=user,
+        active="admin",
+    )
+
+
+@router.get("/admin/peers/{peer_id}/edit", response_class=HTMLResponse)
+def admin_peer_edit(
+    peer_id: int,
+    request: Request,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    peer = (
+        db.query(PeerRequest)
+        .options(joinedload(PeerRequest.agent))
+        .filter(PeerRequest.id == peer_id)
+        .one_or_none()
+    )
+    if peer is None:
+        raise HTTPException(status_code=404, detail="Peer not found")
+    agents = db.query(Agent).order_by(Agent.name).all()
+    return render(
+        request,
+        "admin/peer_edit.html",
+        {
+            "peer": peer,
+            "agents": agents,
             "default_wireguard_mtu": DEFAULT_WIREGUARD_MTU,
             "wireguard_mtu_min": MIN_WIREGUARD_MTU,
             "wireguard_mtu_max": MAX_WIREGUARD_MTU,
@@ -256,15 +307,16 @@ def admin_update_agent(
     agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
+    edit_url = f"/admin/agents/{agent_id}/edit"
     name = name.strip()
     url = url.strip()
     if not name or not url:
         flash(request, "Agent name and URL are required.", "error")
-        return RedirectResponse("/admin/agents", status_code=303)
+        return RedirectResponse(edit_url, status_code=303)
     existing = db.query(Agent).filter(Agent.name == name, Agent.id != agent.id).one_or_none()
     if existing is not None:
         flash(request, f"An agent named '{name}' already exists.", "error")
-        return RedirectResponse("/admin/agents", status_code=303)
+        return RedirectResponse(edit_url, status_code=303)
     agent.name = name
     agent.location = location.strip()
     agent.url = url
@@ -275,7 +327,7 @@ def admin_update_agent(
         agent.wg_public_key = fetched
     db.commit()
     flash(request, f"Agent '{name}' saved.", "success")
-    return RedirectResponse("/admin/agents", status_code=303)
+    return RedirectResponse(edit_url, status_code=303)
 
 
 @router.post("/admin/agents/{agent_id}/refresh-pubkey")
@@ -297,11 +349,11 @@ def admin_refresh_agent_pubkey(
             "then retry.",
             "error",
         )
-        return RedirectResponse("/admin/agents", status_code=303)
+        return RedirectResponse(f"/admin/agents/{agent_id}/edit", status_code=303)
     agent.wg_public_key = key
     db.commit()
     flash(request, f"Refreshed WireGuard public key for '{agent.name}'.", "success")
-    return RedirectResponse("/admin/agents", status_code=303)
+    return RedirectResponse(f"/admin/agents/{agent_id}/edit", status_code=303)
 
 
 @router.post("/admin/agents/{agent_id}/reset-token")
@@ -317,7 +369,7 @@ def admin_reset_agent_token(
     agent.token = secrets.token_urlsafe(32)
     db.commit()
     flash(request, f"Issued a new API token for '{agent.name}'.", "success")
-    return RedirectResponse("/admin/agents", status_code=303)
+    return RedirectResponse(f"/admin/agents/{agent_id}/edit", status_code=303)
 
 
 @router.post("/admin/agents/{agent_id}/delete")
@@ -428,10 +480,11 @@ def admin_update_peer(
     peer = db.query(PeerRequest).filter(PeerRequest.id == peer_id).one_or_none()
     if peer is None:
         raise HTTPException(status_code=404, detail="Peer not found")
+    edit_url = f"/admin/peers/{peer_id}/edit"
     agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
     if agent is None:
         flash(request, "Unknown agent.", "error")
-        return RedirectResponse("/admin/peers", status_code=303)
+        return RedirectResponse(edit_url, status_code=303)
     try:
         update_peer(
             db,
@@ -448,10 +501,10 @@ def admin_update_peer(
         )
     except ValueError as exc:
         flash(request, str(exc), "error")
-        return RedirectResponse("/admin/peers", status_code=303)
+        return RedirectResponse(edit_url, status_code=303)
     db.commit()
     flash(request, f"Peer #{peer.id} saved.", "success")
-    return RedirectResponse("/admin/peers", status_code=303)
+    return RedirectResponse(edit_url, status_code=303)
 
 
 @router.post("/admin/peers/{peer_id}/redeploy")
@@ -464,16 +517,17 @@ def admin_redeploy_peer(
     peer = db.query(PeerRequest).filter(PeerRequest.id == peer_id).one_or_none()
     if peer is None:
         raise HTTPException(status_code=404, detail="Peer not found")
+    edit_url = f"/admin/peers/{peer_id}/edit"
     if peer.status != "approved":
         flash(request, "Only approved peers can be deployed.", "error")
-        return RedirectResponse("/admin/peers", status_code=303)
+        return RedirectResponse(edit_url, status_code=303)
     deploy_peer_request(peer, settings)
     db.commit()
     if peer.deploy_status == "deployed":
         flash(request, f"Peer #{peer.id} redeployed.", "success")
     else:
         flash(request, f"Peer #{peer.id} deploy failed: {peer.deploy_output[:200]}", "error")
-    return RedirectResponse("/admin/peers", status_code=303)
+    return RedirectResponse(edit_url, status_code=303)
 
 
 @router.post("/admin/peers/{peer_id}/delete")

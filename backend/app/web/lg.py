@@ -19,6 +19,15 @@ from app.web.deps import client_ip, lg_rate_limiter, logger, query_enabled_agent
 router = APIRouter()
 
 
+@router.get("/lg", response_class=HTMLResponse)
+def looking_glass_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+    """Render the looking-glass query form (the POST handler below runs the query)."""
+    agents = query_enabled_agents(db).all()
+    return render(
+        request, "lg.html", {"agents": agents}, user=current_user(request, db), active="lg"
+    )
+
+
 @router.post("/lg", response_class=HTMLResponse)
 async def looking_glass(
     request: Request,
@@ -79,7 +88,7 @@ async def looking_glass(
     agents = query_enabled_agents(db).all()
     return render(
         request,
-        "index.html",
+        "lg.html",
         {
             "agents": agents,
             "lg_result": result_text,

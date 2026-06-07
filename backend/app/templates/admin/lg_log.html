@@ -1,8 +1,8 @@
 {% extends "admin/layout.html" %}
 {% from "macros.html" import page_header, badge, pagination %}
-{% block title %}Looking-glass log · {{ settings.app_name }}{% endblock %}
+{% block title %}Query log · {{ settings.app_name }}{% endblock %}
 {% block admin %}
-{{ page_header("Looking-glass log", "Every query dispatched to a PoP, with its outcome.") }}
+{{ page_header("Query log", "Every query dispatched to a PoP, with its outcome.") }}
 <div class="card">
   {% if queries %}
   <div class="table-wrap">

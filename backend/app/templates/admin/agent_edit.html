@@ -1,0 +1,80 @@
+{% extends "admin/layout.html" %}
+{% from "macros.html" import page_header, copy_button, badge %}
+{% block title %}{{ agent.name }} · PoPs · {{ settings.app_name }}{% endblock %}
+{% block admin %}
+{{ page_header("PoP: " ~ agent.name, "Edit this point of presence, view its status, and manage its credentials.") }}
+<p><a class="btn btn-ghost btn-sm" href="/admin/agents">← All PoPs</a></p>
+
+<div class="card">
+  <h2>Details</h2>
+  <form method="post" action="/admin/agents/{{ agent.id }}/update" class="form-grid">
+    <label class="field">Name<input name="name" value="{{ agent.name }}" required></label>
+    <label class="field">Location<input name="location" value="{{ agent.location }}"></label>
+    <label class="field">Endpoint URL<input name="url" value="{{ agent.url }}" required></label>
+    <label class="checkbox-label"><input type="checkbox" name="enabled" {% if agent.enabled %}checked{% endif %}> Enabled</label>
+    <button type="submit" class="btn-primary">Save</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Status</h2>
+  <div class="kv">
+    <div class="kv-row">
+      <span class="kv-key">Connection</span>
+      <span class="online-state {{ 'is-online' if runtime.online else 'is-offline' }}">
+        <span class="online-dot" aria-hidden="true"></span>{{ "online" if runtime.online else "offline" }}
+      </span>
+    </div>
+    {% if runtime.last_seen_at %}
+    <div class="kv-row"><span class="kv-key">Last seen</span><span class="kv-val">{{ runtime.last_seen_at.strftime("%Y-%m-%d %H:%M") }} UTC</span></div>
+    {% endif %}
+    <div class="kv-row"><span class="kv-key">System</span><span class="kv-val">{{ runtime.system_summary }}</span></div>
+  </div>
+  {% if runtime.resource_metrics %}
+  <div class="resource-metrics">
+    {% for m in runtime.resource_metrics %}<span class="resource-metric"><span>{{ m.label }}</span>{{ m.value }}</span>{% endfor %}
+  </div>
+  {% endif %}
+  {% set sys = runtime.system %}
+  {% if sys.wireguard %}
+    <div class="status-label">WireGuard {{ badge("ok", "ok") if sys.wireguard.ok else badge("fail", "bad") }}</div>
+    <pre class="terminal agent-status-output">{{ sys.wireguard.output or "(no output)" }}</pre>
+  {% endif %}
+  {% if sys.bird %}
+    <div class="status-label">BIRD {{ badge("ok", "ok") if sys.bird.ok else badge("fail", "bad") }}</div>
+    <pre class="terminal agent-status-output">{{ sys.bird.output or "(no output)" }}</pre>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Credentials</h2>
+  <div class="kv">
+    <div class="kv-row">
+      <span class="kv-key">API token</span>
+      <span class="kv-val">{{ agent.token }}</span>{{ copy_button(agent.token) }}
+    </div>
+    <div class="kv-row">
+      <span class="kv-key">WireGuard public key</span>
+      <span class="kv-val">{{ agent.wg_public_key or "—" }}</span>
+      {% if agent.wg_public_key %}{{ copy_button(agent.wg_public_key) }}{% endif %}
+    </div>
+  </div>
+  <div class="row-actions edit-actions">
+    <form method="post" action="/admin/agents/{{ agent.id }}/refresh-pubkey">
+      <button type="submit" class="btn-secondary btn-sm">Refresh key</button>
+    </form>
+    <form method="post" action="/admin/agents/{{ agent.id }}/reset-token"
+          data-confirm="Issue a new API token for {{ agent.name }}? The agent must be reconfigured with the new token.">
+      <button type="submit" class="btn-secondary btn-sm">Reset token</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Danger zone</h2>
+  <form method="post" action="/admin/agents/{{ agent.id }}/delete"
+        data-confirm="Delete agent {{ agent.name }}? This cannot be undone.">
+    <button type="submit" class="btn-danger">Delete this PoP</button>
+  </form>
+</div>
+{% endblock %}

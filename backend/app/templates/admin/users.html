@@ -1,8 +1,8 @@
 {% extends "admin/layout.html" %}
 {% from "macros.html" import page_header, bool_pill %}
-{% block title %}Users · {{ settings.app_name }}{% endblock %}
+{% block title %}Members · {{ settings.app_name }}{% endblock %}
 {% block admin %}
-{{ page_header("Users", "Everyone who has authenticated via Kioubit.dn42.") }}
+{{ page_header("Members", "Everyone who has authenticated via Kioubit.dn42.") }}
 <div class="card">
   {% if users %}
   {% for u in users %}

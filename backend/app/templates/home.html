@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge %}
+{% block title %}{{ settings.app_name }}{% endblock %}
+{% block content %}
+<section class="hero card">
+  <h1>{{ settings.app_name }}</h1>
+  {% if settings.local_asn %}<p class="hero-asn mono">AS{{ settings.local_asn }}</p>{% endif %}
+  <p class="muted hero-tagline">
+    Automated dn42 peering and a public looking glass across our points of presence.
+    Bring your ASN, pick a PoP, and get a ready-to-use WireGuard + BGP config.
+  </p>
+  <div class="hero-actions">
+    <a class="btn btn-primary" href="/lg">Open Looking Glass</a>
+    {% if user %}
+      <a class="btn btn-secondary" href="/portal">Your peerings</a>
+    {% else %}
+      <a class="btn btn-secondary" href="/login">Peer with us</a>
+    {% endif %}
+  </div>
+</section>
+
+<div class="section-title">
+  <h2>Points of presence</h2>
+  <span class="muted">{{ agents_online }} / {{ agents | length }} online</span>
+</div>
+
+{% if agents %}
+<div class="pop-grid">
+  {% for agent in agents %}
+  {% set rt = agent_runtime[agent.id] %}
+  <div class="pop-card">
+    <div class="pop-card-head">
+      <div class="pop-id">
+        <span class="pop-name">{{ agent.name }}</span>
+        {% if agent.location %}<span class="pop-loc">{{ agent.location }}</span>{% endif %}
+      </div>
+      <span class="online-state {{ 'is-online' if rt.online else 'is-offline' }}">
+        <span class="online-dot" aria-hidden="true"></span>{{ "online" if rt.online else "offline" }}
+      </span>
+    </div>
+    {% if rt.online %}
+      <div class="pop-summary">{{ rt.system_summary }}</div>
+      {% if rt.resource_metrics %}
+      <div class="resource-metrics">
+        {% for m in rt.resource_metrics %}
+          <span class="resource-metric"><span>{{ m.label }}</span>{{ m.value }}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+    {% else %}
+      <div class="pop-summary faint">
+        {% if rt.last_seen_at %}Last seen {{ rt.last_seen_at.strftime("%Y-%m-%d %H:%M") }} UTC
+        {% else %}No heartbeat yet{% endif %}
+      </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">No points of presence are configured yet.</div>
+{% endif %}
+{% endblock %}

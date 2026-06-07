@@ -1,0 +1,70 @@
+{% extends "admin/layout.html" %}
+{% from "macros.html" import page_header, deploy_badge %}
+{% block title %}Peer #{{ peer.id }} · Peerings · {{ settings.app_name }}{% endblock %}
+{% block admin %}
+{{ page_header("Peer #" ~ peer.id ~ " · AS" ~ peer.asn, "Edit this peering on " ~ peer.agent.name ~ ".") }}
+<p><a class="btn btn-ghost btn-sm" href="/admin/peers">← All peerings</a></p>
+
+<div class="card">
+  <h2>Configuration</h2>
+  <form method="post" action="/admin/peers/{{ peer.id }}/update" class="form-grid">
+    <label class="field">Peer ASN
+      <input value="AS{{ peer.asn }}" disabled>
+    </label>
+    <label class="field">Agent (PoP)
+      <select name="agent_id" required>
+        {% for agent in agents %}
+          <option value="{{ agent.id }}" {% if peer.agent_id == agent.id %}selected{% endif %}>
+            {{ agent.name }}{% if not agent.enabled %} (disabled){% endif %}
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">WireGuard endpoint
+      <input name="endpoint" value="{{ peer.endpoint }}" required>
+    </label>
+    <label class="field">WireGuard public key
+      <input name="wg_public_key" value="{{ peer.wg_public_key }}" required>
+    </label>
+    <label class="field">WireGuard MTU
+      <input name="wg_mtu" type="number" min="{{ wireguard_mtu_min }}" max="{{ wireguard_mtu_max }}"
+             value="{{ peer.wg_mtu or default_wireguard_mtu }}" required>
+    </label>
+    <label class="field">Our address
+      <input name="local_link_address" value="{{ peer.local_link_address }}" required>
+    </label>
+    <label class="field">Peer address
+      <input name="peer_link_address" value="{{ peer.peer_link_address }}" required>
+    </label>
+    <label class="field">Status
+      <select name="status">
+        <option value="approved" {% if peer.status == "approved" %}selected{% endif %}>approved</option>
+        <option value="disabled" {% if peer.status == "disabled" %}selected{% endif %}>disabled</option>
+      </select>
+    </label>
+    <button type="submit" class="btn-primary">Save</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="section-title"><h2>Deployment</h2><span>{{ deploy_badge(peer.deploy_status) }}</span></div>
+  <div class="row-actions edit-actions">
+    <form method="post" action="/admin/peers/{{ peer.id }}/redeploy">
+      <button type="submit" class="btn-secondary btn-sm">Redeploy</button>
+    </form>
+    <a href="/admin/peers/{{ peer.id }}/config" class="btn btn-ghost btn-sm">View config</a>
+  </div>
+  {% if peer.deploy_output %}
+  <div class="status-label">Last deploy output</div>
+  <pre class="terminal">{{ peer.deploy_output }}</pre>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Danger zone</h2>
+  <form method="post" action="/admin/peers/{{ peer.id }}/delete"
+        data-confirm="Delete peer #{{ peer.id }} (AS{{ peer.asn }})? This tears it down on the router.">
+    <button type="submit" class="btn-danger">Delete this peer</button>
+  </form>
+</div>
+{% endblock %}

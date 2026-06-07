@@ -14,7 +14,7 @@
     <table>
       <thead>
         <tr>
-          <th>ID</th><th>ASN</th><th>Agent</th><th>Endpoint</th><th>WG public key</th>
+          <th>ID</th><th>ASN</th><th>Agent</th><th>Endpoint</th><th>WG public key</th><th>MTU</th>
           <th>Our addr</th><th>Peer addr</th><th>Status</th><th>Deploy</th><th>Actions</th>
         </tr>
       </thead>
@@ -30,6 +30,7 @@
           </td>
           <td><input form="peer-update-{{ peer.id }}" name="endpoint" value="{{ peer.endpoint }}" required></td>
           <td><input form="peer-update-{{ peer.id }}" name="wg_public_key" value="{{ peer.wg_public_key }}" required></td>
+          <td><input form="peer-update-{{ peer.id }}" name="wg_mtu" type="number" min="{{ wireguard_mtu_min }}" max="{{ wireguard_mtu_max }}" value="{{ peer.wg_mtu or default_wireguard_mtu }}" required></td>
           <td><input form="peer-update-{{ peer.id }}" name="local_link_address" value="{{ peer.local_link_address }}" required></td>
           <td><input form="peer-update-{{ peer.id }}" name="peer_link_address" value="{{ peer.peer_link_address }}" required></td>
           <td>

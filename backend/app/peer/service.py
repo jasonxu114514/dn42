@@ -14,6 +14,7 @@ from app.peer.validation import (
     normalize_endpoint,
     normalize_link_local_address,
     normalize_wireguard_key,
+    normalize_wireguard_mtu,
 )
 
 logger = logging.getLogger("dn42.autopeer")
@@ -80,6 +81,7 @@ def create_peer(
     local_link_address: str,
     peer_link_address: str,
     settings: Settings,
+    wg_mtu: int | str | None = None,
 ) -> PeerRequest:
     """Create, persist (flush), and deploy a peer for ``user`` on ``agent``.
 
@@ -92,6 +94,7 @@ def create_peer(
         )
     endpoint = normalize_endpoint(endpoint)
     wg_public_key = normalize_wireguard_key(wg_public_key)
+    wg_mtu = normalize_wireguard_mtu(wg_mtu)
     local_link_address = normalize_link_local_address(local_link_address)
     peer_link_address = normalize_link_local_address(peer_link_address)
     peer = PeerRequest(
@@ -100,6 +103,7 @@ def create_peer(
         agent_id=agent.id,
         endpoint=endpoint,
         wg_public_key=wg_public_key,
+        wg_mtu=wg_mtu,
         local_link_address=local_link_address,
         peer_link_address=peer_link_address,
         status="approved",
@@ -123,6 +127,7 @@ def update_peer(
     status: str,
     settings: Settings,
     redeploy: bool = False,
+    wg_mtu: int | str | None = None,
 ) -> None:
     """Update a peer's fields. Tears down a peer moved to ``disabled``; optionally redeploys an
     approved peer. Raises ValueError on a duplicate or invalid input. Caller commits.
@@ -134,6 +139,8 @@ def update_peer(
         raise ValueError(f"AS{peer.asn} already has another peer (#{duplicate.id}) on this PoP.")
     endpoint = normalize_endpoint(endpoint)
     wg_public_key = normalize_wireguard_key(wg_public_key)
+    if wg_mtu is not None:
+        peer.wg_mtu = normalize_wireguard_mtu(wg_mtu)
     local_link_address = normalize_link_local_address(local_link_address)
     peer_link_address = normalize_link_local_address(peer_link_address)
     peer.agent_id = agent.id

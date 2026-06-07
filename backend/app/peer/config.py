@@ -1,7 +1,12 @@
 from urllib.parse import urlsplit
 
 from app.db.models import Agent, PeerRequest
-from app.peer.validation import asn_link_local_address, normalize_asn_number, wireguard_listen_port
+from app.peer.validation import (
+    asn_link_local_address,
+    normalize_asn_number,
+    normalize_wireguard_mtu,
+    wireguard_listen_port,
+)
 
 
 def agent_wireguard_endpoint(peer: PeerRequest, agent: Agent) -> str:
@@ -35,6 +40,10 @@ def local_default_link_ip(local_asn: str) -> str:
     return asn_link_local_address(local_asn)
 
 
+def peer_wireguard_mtu(peer: PeerRequest) -> int:
+    return normalize_wireguard_mtu(getattr(peer, "wg_mtu", None))
+
+
 def peer_protocol_name(peer: PeerRequest, agent: Agent) -> str:
     """WireGuard interface, ``.conf`` filenames, and BIRD protocol name for this peer.
 
@@ -66,6 +75,7 @@ def peering_info(peer: PeerRequest, agent: Agent) -> dict[str, str]:
         "endpoint": agent_wireguard_endpoint(peer, agent),
         "public_key": agent.wg_public_key or "<our-wireguard-public-key>",
         "tunnel_ip": local_link_ip(peer),
+        "mtu": str(peer_wireguard_mtu(peer)),
     }
 
 
@@ -79,6 +89,7 @@ def render_user_config(peer: PeerRequest, agent: Agent, local_asn: str = "<our-a
 [Interface]
 # PrivateKey = <your-private-key>
 # Address = {peer_link_ip(peer)}/64
+MTU = {peer_wireguard_mtu(peer)}
 
 [Peer]
 PublicKey = {our_public_key}
@@ -105,6 +116,7 @@ def render_wireguard_peer_config(
 PrivateKey = {private_key_placeholder}
 ListenPort = {listen_port}
 Table = off
+MTU = {peer_wireguard_mtu(peer)}
 PostUp = ip addr add {post_up_address(peer)} dev %i
 
 [Peer]

@@ -13,7 +13,12 @@ from app.db.models import Agent, PeerRequest
 from app.db.session import get_db
 from app.peer.config import peering_info, render_user_config
 from app.peer.service import create_peer
-from app.peer.validation import asn_link_local_address
+from app.peer.validation import (
+    DEFAULT_WIREGUARD_MTU,
+    MAX_WIREGUARD_MTU,
+    MIN_WIREGUARD_MTU,
+    asn_link_local_address,
+)
 from app.web.deps import flash, query_enabled_agents, render, settings
 
 router = APIRouter()
@@ -60,6 +65,9 @@ def portal(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
             ],
             "default_local_link_address": default_local_link_address,
             "default_peer_link_address": default_peer_link_address,
+            "default_wireguard_mtu": DEFAULT_WIREGUARD_MTU,
+            "wireguard_mtu_min": MIN_WIREGUARD_MTU,
+            "wireguard_mtu_max": MAX_WIREGUARD_MTU,
         },
         user=user,
         active="portal",
@@ -72,6 +80,7 @@ def create_peer_request(
     agent_id: int = Form(...),
     endpoint: str = Form(...),
     wg_public_key: str = Form(...),
+    wg_mtu: str | None = Form(None),
     local_link_address: str = Form(...),
     peer_link_address: str = Form(...),
     db: Session = Depends(get_db),
@@ -90,6 +99,7 @@ def create_peer_request(
             agent=agent,
             endpoint=endpoint,
             wg_public_key=wg_public_key,
+            wg_mtu=wg_mtu,
             local_link_address=local_link_address,
             peer_link_address=peer_link_address,
             settings=settings,

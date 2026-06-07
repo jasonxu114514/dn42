@@ -1,11 +1,13 @@
 from sqlalchemy import inspect, text
 
 from app.db.session import Base, engine
+from app.peer.validation import DEFAULT_WIREGUARD_MTU
 
 
 def create_schema() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_agent_columns()
+    _ensure_peer_request_columns()
 
 
 def _ensure_agent_columns() -> None:
@@ -26,4 +28,20 @@ def _ensure_agent_columns() -> None:
         with engine.begin() as conn:
             conn.execute(
                 text("ALTER TABLE agents ADD COLUMN wg_public_key VARCHAR(128) NOT NULL DEFAULT ''")
+            )
+
+
+def _ensure_peer_request_columns() -> None:
+    """Backfill columns added to ``PeerRequest`` after a database was first created."""
+    inspector = inspect(engine)
+    if "peer_requests" not in inspector.get_table_names():
+        return
+    columns = {col["name"] for col in inspector.get_columns("peer_requests")}
+    if "wg_mtu" not in columns:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE peer_requests "
+                    f"ADD COLUMN wg_mtu INTEGER NOT NULL DEFAULT {DEFAULT_WIREGUARD_MTU}"
+                )
             )

@@ -4,6 +4,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, Uni
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
+from app.peer.validation import DEFAULT_WIREGUARD_MTU
 
 
 def utcnow() -> datetime:
@@ -93,6 +94,9 @@ class PeerRequest(Base):
     tunnel_type: Mapped[str] = mapped_column(String(32), default="wireguard")
     endpoint: Mapped[str] = mapped_column(String(255))
     wg_public_key: Mapped[str] = mapped_column(String(128))
+    wg_mtu: Mapped[int] = mapped_column(
+        Integer, default=DEFAULT_WIREGUARD_MTU, server_default=str(DEFAULT_WIREGUARD_MTU)
+    )
     local_link_address: Mapped[str] = mapped_column(String(128), default="")
     peer_link_address: Mapped[str] = mapped_column(String(128), default="")
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)

@@ -23,7 +23,7 @@ from app.db.session import get_db
 from app.lg.client import AgentClient
 from app.peer.config import peer_protocol_name, peering_info
 from app.peer.service import create_peer, delete_peer, derive_link_addresses, update_peer
-from app.peer.validation import normalize_asn_number
+from app.peer.validation import MAX_WIREGUARD_MTU, MIN_WIREGUARD_MTU, normalize_asn_number
 
 router = APIRouter(prefix="/api/telegram", tags=["telegram"])
 
@@ -66,6 +66,7 @@ class PeerCreateRequest(BaseModel):
     agent: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
     endpoint: str = Field(min_length=1, max_length=255)
     wg_public_key: str = Field(min_length=1, max_length=128)
+    wg_mtu: int | None = Field(default=None, ge=MIN_WIREGUARD_MTU, le=MAX_WIREGUARD_MTU)
 
 
 class PeerEditRequest(BaseModel):
@@ -75,6 +76,7 @@ class PeerEditRequest(BaseModel):
     peer_id: int = Field(ge=1)
     endpoint: str = Field(min_length=1, max_length=255)
     wg_public_key: str = Field(min_length=1, max_length=128)
+    wg_mtu: int | None = Field(default=None, ge=MIN_WIREGUARD_MTU, le=MAX_WIREGUARD_MTU)
 
 
 class PeerDeleteRequest(BaseModel):
@@ -250,6 +252,7 @@ def telegram_peer_status(telegram_user_id: str, db: Session = Depends(get_db)) -
                 "agent": peer.agent.name,
                 "status": peer.status,
                 "endpoint": peer.endpoint,
+                "wg_mtu": peer.wg_mtu,
                 "created_at": peer.created_at.isoformat(),
             }
             for peer in peers
@@ -286,6 +289,7 @@ def _peer_summary(peer: PeerRequest) -> dict[str, Any]:
         "asn": peer.asn,
         "deploy_status": peer.deploy_status,
         "deploy_output": peer.deploy_output,
+        "wg_mtu": peer.wg_mtu,
         # The "our side" details the peer needs to configure their end; the bot shows these once
         # the deploy succeeds. 部署成功後 bot 會把這些「我方」參數回給使用者設定對端。
         "peering": peering_info(peer, peer.agent),
@@ -325,6 +329,7 @@ def telegram_peer_create(
             agent=agent,
             endpoint=payload.endpoint,
             wg_public_key=payload.wg_public_key,
+            wg_mtu=payload.wg_mtu,
             local_link_address=local_link_address,
             peer_link_address=peer_link_address,
             settings=settings,
@@ -346,6 +351,7 @@ def telegram_peer_edit(payload: PeerEditRequest, db: Session = Depends(get_db)) 
             agent=peer.agent,
             endpoint=payload.endpoint,
             wg_public_key=payload.wg_public_key,
+            wg_mtu=payload.wg_mtu,
             local_link_address=peer.local_link_address,
             peer_link_address=peer.peer_link_address,
             status=peer.status,
@@ -413,6 +419,7 @@ async def telegram_status(
                 "asn": peer.asn,
                 "status": peer.status,
                 "endpoint": peer.endpoint,
+                "wg_mtu": peer.wg_mtu,
                 "deploy_status": peer.deploy_status,
                 "peering": peering_info(peer, agent),
             }

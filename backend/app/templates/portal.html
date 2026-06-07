@@ -23,6 +23,9 @@
     <label class="field">Your WireGuard public key
       <input name="wg_public_key" placeholder="44-char base64 key" required>
     </label>
+    <label class="field">WireGuard MTU
+      <input name="wg_mtu" type="number" min="{{ wireguard_mtu_min }}" max="{{ wireguard_mtu_max }}" value="{{ default_wireguard_mtu }}" required>
+    </label>
     <label class="field">Our address{% if settings.local_asn %} (AS{{ settings.local_asn }}){% endif %}
       <input name="local_link_address" value="{{ default_local_link_address }}" placeholder="fe80::1260" required>
     </label>
@@ -42,7 +45,7 @@
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>ID</th><th>ASN</th><th>PoP</th><th>Status</th><th>Deploy</th><th>Config</th></tr>
+        <tr><th>ID</th><th>ASN</th><th>PoP</th><th>MTU</th><th>Status</th><th>Deploy</th><th>Config</th></tr>
       </thead>
       <tbody>
         {% for item in peers %}
@@ -51,13 +54,14 @@
             <td>#{{ peer.id }}</td>
             <td class="mono">AS{{ peer.asn }}</td>
             <td>{{ peer.agent.name }}</td>
+            <td class="mono">{{ peer.wg_mtu or default_wireguard_mtu }}</td>
             <td>{{ status_badge(peer.status) }}</td>
             <td>{{ deploy_badge(peer.deploy_status) }}</td>
             <td><a href="/portal/peers/{{ peer.id }}/config">view</a></td>
           </tr>
           {% if item.peering %}
           <tr class="detail-row">
-            <td colspan="6">
+            <td colspan="7">
               <p class="muted">Tunnel is up — configure your side with our details:</p>
               <div class="kv">
                 <div class="kv-row">
@@ -71,6 +75,10 @@
                 <div class="kv-row">
                   <span class="kv-key">Our tunnel IP (your BGP neighbor)</span>
                   <span class="kv-val">{{ item.peering.tunnel_ip }}</span>{{ copy_button(item.peering.tunnel_ip) }}
+                </div>
+                <div class="kv-row">
+                  <span class="kv-key">WireGuard MTU</span>
+                  <span class="kv-val">{{ item.peering.mtu }}</span>
                 </div>
               </div>
             </td>

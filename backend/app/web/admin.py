@@ -19,6 +19,7 @@ from app.db.session import get_db
 from app.peer.config import render_operator_config
 from app.peer.deploy import fetch_agent_public_key
 from app.peer.service import delete_peer, deploy_peer_request, update_peer
+from app.peer.validation import DEFAULT_WIREGUARD_MTU, MAX_WIREGUARD_MTU, MIN_WIREGUARD_MTU
 from app.web.deps import Pagination, flash, render, require_admin, settings
 
 router = APIRouter()
@@ -112,7 +113,17 @@ def admin_peers(
         .all()
     )
     return render(
-        request, "admin/peers.html", {"agents": agents, "peers": peers}, user=user, active="admin"
+        request,
+        "admin/peers.html",
+        {
+            "agents": agents,
+            "peers": peers,
+            "default_wireguard_mtu": DEFAULT_WIREGUARD_MTU,
+            "wireguard_mtu_min": MIN_WIREGUARD_MTU,
+            "wireguard_mtu_max": MAX_WIREGUARD_MTU,
+        },
+        user=user,
+        active="admin",
     )
 
 
@@ -313,6 +324,7 @@ def admin_update_peer(
     agent_id: int = Form(...),
     endpoint: str = Form(...),
     wg_public_key: str = Form(...),
+    wg_mtu: str | None = Form(None),
     local_link_address: str = Form(...),
     peer_link_address: str = Form(...),
     status: str = Form("approved"),
@@ -333,6 +345,7 @@ def admin_update_peer(
             agent=agent,
             endpoint=endpoint,
             wg_public_key=wg_public_key,
+            wg_mtu=wg_mtu,
             local_link_address=local_link_address,
             peer_link_address=peer_link_address,
             status=status,

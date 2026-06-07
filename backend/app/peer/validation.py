@@ -12,6 +12,9 @@ _HOSTNAME_RE = re.compile(
     r"(?=.{1,253}\Z)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?"
 )
 _WIREGUARD_KEY_RE = re.compile(r"[A-Za-z0-9+/]{43}=")
+DEFAULT_WIREGUARD_MTU = 1420
+MIN_WIREGUARD_MTU = 1280
+MAX_WIREGUARD_MTU = 9000
 
 
 def normalize_endpoint(value: str) -> str:
@@ -59,6 +62,26 @@ def normalize_wireguard_key(value: str) -> str:
     if not _WIREGUARD_KEY_RE.fullmatch(value):
         raise ValueError("WireGuard public key must be a 44-character base64 value")
     return value
+
+
+def normalize_wireguard_mtu(value: int | str | None = None) -> int:
+    """Validate a wg-quick MTU value; blank input falls back to the default."""
+    if value is None:
+        return DEFAULT_WIREGUARD_MTU
+    if isinstance(value, int):
+        mtu = value
+    else:
+        value = value.strip()
+        if not value:
+            return DEFAULT_WIREGUARD_MTU
+        if not value.isdigit():
+            raise ValueError("WireGuard MTU must be an integer")
+        mtu = int(value)
+    if not MIN_WIREGUARD_MTU <= mtu <= MAX_WIREGUARD_MTU:
+        raise ValueError(
+            f"WireGuard MTU must be between {MIN_WIREGUARD_MTU} and {MAX_WIREGUARD_MTU}"
+        )
+    return mtu
 
 
 def asn_link_local_address(asn: str) -> str:

@@ -25,7 +25,13 @@ from aiogram.types import (
 )
 
 from app.config import get_settings
-from app.peer.validation import normalize_asn_number
+from app.peer.validation import (
+    DEFAULT_WIREGUARD_MTU,
+    MAX_WIREGUARD_MTU,
+    MIN_WIREGUARD_MTU,
+    normalize_asn_number,
+    normalize_wireguard_mtu,
+)
 
 settings = get_settings()
 
@@ -76,12 +82,14 @@ class CreatePeer(StatesGroup):
     agent = State()
     endpoint = State()
     public_key = State()
+    mtu = State()
 
 
 class EditPeer(StatesGroup):
     choosing = State()
     endpoint = State()
     public_key = State()
+    mtu = State()
 
 
 class DeletePeer(StatesGroup):
@@ -223,8 +231,24 @@ def parse_peer_id(text: str | None) -> int | None:
     return int(cleaned) if cleaned.isdigit() else None
 
 
+def parse_mtu(text: str | None, *, allow_keep: bool = False) -> int | None:
+    value = (text or "").strip().lower()
+    if allow_keep and value in {"keep", "same"}:
+        return None
+    if value in {"", "default"}:
+        return DEFAULT_WIREGUARD_MTU
+    return normalize_wireguard_mtu(value)
+
+
+def peer_mtu(peer: dict) -> int:
+    return int(peer.get("wg_mtu") or DEFAULT_WIREGUARD_MTU)
+
+
 def peer_list_text(peers: list[dict]) -> str:
-    return "\n".join(f"#{p['id']} {p['agent']} {p['status']} {p['endpoint']}" for p in peers)
+    return "\n".join(
+        f"#{p['id']} {p['agent']} {p['status']} {p['endpoint']} mtu={peer_mtu(p)}"
+        for p in peers
+    )
 
 
 def agent_keyboard(agents: list[dict]) -> ReplyKeyboardMarkup:
@@ -289,7 +313,8 @@ def peering_info_lines(info: dict) -> str:
     return (
         f"our endpoint:  {info.get('endpoint', '')}\n"
         f"our pubkey:    {info.get('public_key', '')}\n"
-        f"our tunnel IP: {info.get('tunnel_ip', '')}  (your BGP neighbor)"
+        f"our tunnel IP: {info.get('tunnel_ip', '')}  (your BGP neighbor)\n"
+        f"wireguard MTU: {info.get('mtu', DEFAULT_WIREGUARD_MTU)}"
     )
 
 
@@ -527,6 +552,8 @@ async def peers_cmd(message: Message) -> None:
             lines.append(f"your endpoint: {peer['endpoint']}")
         if peer.get("peering"):
             lines.append(peering_info_lines(peer["peering"]))
+        else:
+            lines.append(f"wireguard MTU: {peer_mtu(peer)}")
         wg = str(peer.get("wg_detail", "")).strip() or "(no WireGuard status)"
         bird = str(peer.get("detail", "")).strip() or "(no detail)"
         blocks.append("\n".join(lines) + f"\n\n[WireGuard]\n{wg}\n\n[BIRD]\n{bird}")
@@ -751,7 +778,10 @@ async def edit_cmd(message: Message, state: FSMContext) -> None:
     if not peers:
         await message.answer("You have no peers to edit. Use /create first.")
         return
-    await state.update_data(peer_ids=[p["id"] for p in peers])
+    await state.update_data(
+        peer_ids=[p["id"] for p in peers],
+        peer_mtu={str(p["id"]): peer_mtu(p) for p in peers},
+    )
     await state.set_state(EditPeer.choosing)
     await message.answer(
         "Which peer do you want to edit?\n" + peer_list_text(peers),
@@ -818,13 +848,31 @@ async def create_key_step(message: Message, state: FSMContext) -> None:
             "Try again or /cancel."
         )
         return
+    await state.update_data(wg_public_key=key)
+    await state.set_state(CreatePeer.mtu)
+    await message.answer(
+        f"WireGuard MTU ({MIN_WIREGUARD_MTU}-{MAX_WIREGUARD_MTU}). "
+        f"Send 'default' to use {DEFAULT_WIREGUARD_MTU}."
+    )
+
+
+@dp.message(CreatePeer.mtu)
+async def create_mtu_step(message: Message, state: FSMContext) -> None:
+    if await reject_if_command(message, "create"):
+        return
+    try:
+        mtu = parse_mtu(message.text)
+    except ValueError as exc:
+        await message.answer(f"{exc}. Try again or /cancel.")
+        return
     data = await state.get_data()
     await state.clear()
     payload = {
         "telegram_user_id": str(message.from_user.id),
         "agent": data["agent"],
         "endpoint": data["endpoint"],
-        "wg_public_key": key,
+        "wg_public_key": data["wg_public_key"],
+        "wg_mtu": mtu,
     }
     result = await call_backend(
         message,
@@ -873,13 +921,33 @@ async def edit_key_step(message: Message, state: FSMContext) -> None:
     if not WG_KEY_RE.match(key):
         await message.answer("That doesn't look like a WireGuard public key. Try again or /cancel.")
         return
+    await state.update_data(wg_public_key=key)
+    data = await state.get_data()
+    current_mtu = data.get("peer_mtu", {}).get(str(data["peer_id"]), DEFAULT_WIREGUARD_MTU)
+    await state.set_state(EditPeer.mtu)
+    await message.answer(
+        f"New WireGuard MTU ({MIN_WIREGUARD_MTU}-{MAX_WIREGUARD_MTU}, "
+        f"current {current_mtu}). Send 'keep' to keep it."
+    )
+
+
+@dp.message(EditPeer.mtu)
+async def edit_mtu_step(message: Message, state: FSMContext) -> None:
+    if await reject_if_command(message, "edit"):
+        return
+    try:
+        mtu = parse_mtu(message.text, allow_keep=True)
+    except ValueError as exc:
+        await message.answer(f"{exc}. Try again, send 'keep', or /cancel.")
+        return
     data = await state.get_data()
     await state.clear()
     payload = {
         "telegram_user_id": str(message.from_user.id),
         "peer_id": data["peer_id"],
         "endpoint": data["endpoint"],
-        "wg_public_key": key,
+        "wg_public_key": data["wg_public_key"],
+        "wg_mtu": mtu,
     }
     result = await call_backend(
         message,

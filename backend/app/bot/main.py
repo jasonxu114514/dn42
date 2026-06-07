@@ -109,7 +109,7 @@ def admin_asn_display() -> str:
 
 HELP_TEXT = (
     "dn42 autopeer bot\n"
-    f"Admin ASN: {admin_asn_display()}\n\n"
+    f"Our ASN: {admin_asn_display()}\n\n"
     "/login - Login your dn42 ASN\n"
     "/logout - Logout your dn42 ASN\n"
     "/listpeers - Show your peers status\n"
@@ -120,7 +120,7 @@ HELP_TEXT = (
     "/trace\n"
     "/mtr\n"
     "/route\n"
-    "/cancel - abort the current guided action"
+    "/cancel - Cancel ALL?"
 )
 
 # The command menu shown by Telegram's "/" picker, registered via set_my_commands on startup.

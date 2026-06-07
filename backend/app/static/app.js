@@ -140,6 +140,28 @@
     var lgForm = document.getElementById("lg-form");
     var lgResult = document.getElementById("lg-result");
     if (lgForm && lgResult) {
+      // `status` is router-wide and takes no target — disable (and clear) the Target field while
+      // it is selected so a target can't be entered (the backend rejects one anyway).
+      var lgQuery = lgForm.querySelector('select[name="query_type"]');
+      var lgTarget = lgForm.querySelector('input[name="target"]');
+      if (lgQuery && lgTarget) {
+        var syncTarget = function () {
+          if (lgTarget.dataset.placeholder == null) {
+            lgTarget.dataset.placeholder = lgTarget.getAttribute("placeholder") || "";
+          }
+          if (lgQuery.value === "status") {
+            lgTarget.value = "";
+            lgTarget.disabled = true;
+            lgTarget.placeholder = "Not used for status";
+          } else {
+            lgTarget.disabled = false;
+            lgTarget.placeholder = lgTarget.dataset.placeholder;
+          }
+        };
+        lgQuery.addEventListener("change", syncTarget);
+        syncTarget();
+      }
+
       lgForm.addEventListener("submit", function (e) {
         e.preventDefault();
         var btn = lgForm.querySelector('button[type="submit"]');

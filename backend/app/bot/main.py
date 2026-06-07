@@ -90,16 +90,16 @@ class DeletePeer(StatesGroup):
 
 HELP_TEXT = (
     "dn42 autopeer bot\n\n"
-    "/login - Login your dn42 ASN (Kioubit)\n"
-    "/logout - unlink your dn42 ASN\n"
-    "/listpeers - your peers: our endpoint/pubkey/tunnel IP, WireGuard + BGP status\n"
-    "/create - create a peer (guided)\n"
-    "/edit - edit one of your peers (guided)\n"
-    "/delete - delete one of your peers (guided)\n"
-    "/ping <ip-or-host> - random PoP; tap a button to switch\n"
-    "/trace <ip-or-host> - random PoP; tap a button to switch\n"
-    "/mtr <ip-or-host> - random PoP; tap a button to switch\n"
-    "/route <prefix-or-ip> - random PoP; tap a button to switch\n"
+    "/login - Login your dn42 ASN\n"
+    "/logout - Logout your dn42 ASN\n"
+    "/listpeers - Show your peers status\n"
+    "/create - create a peer\n"
+    "/edit - edit one of your peers\n"
+    "/delete - delete one of your peers\n"
+    "/ping\n"
+    "/trace\n"
+    "/mtr\n"
+    "/route\n"
     "/cancel - abort the current guided action"
 )
 

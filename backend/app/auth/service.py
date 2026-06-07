@@ -49,13 +49,24 @@ def consume_challenge(db: Session, token: str, purpose: str) -> AuthChallenge:
     return challenge
 
 
-def upsert_user_from_kioubit(db: Session, data: dict[str, Any], settings: Settings) -> User:
-    asn = str(data["asn"])
+def _upsert_user_for_asn(
+    db: Session, asn: str, settings: Settings, *, first_email: str | None = None
+) -> User:
+    """Create or update the ``User`` for ``asn`` and (re)compute admin status; return the User.
+
+    Shared by every login source (Kioubit, FindNOC) so they agree on identity and admin rules: admin
+    is granted when the verified ASN equals ``settings.local_asn``. Callers append their own
+    ``ASNIdentity`` audit row. ``asn`` must already be in the canonical bare-number form used by
+    ``User.primary_asn``, so the same operator maps to one row regardless of login method.
+    每個登入來源共用:依 ASN 建立/更新 User 並重算管理員旗標(ASN 等於 local_asn 時授予);呼叫者各自
+    附上 ASNIdentity 稽核列。``asn`` 須為與 primary_asn 一致的裸數字形式。
+    """
     user = db.query(User).filter(User.primary_asn == asn).one_or_none()
     if user is None:
         user = User(primary_asn=asn)
         db.add(user)
-    user.first_email = data.get("first_email") or user.first_email
+    if first_email:
+        user.first_email = first_email
     try:
         user.is_admin = normalize_asn_number(asn) == normalize_asn_number(settings.local_asn)
     except ValueError:
@@ -63,7 +74,12 @@ def upsert_user_from_kioubit(db: Session, data: dict[str, Any], settings: Settin
     user.last_login_at = utcnow()
     db.commit()
     db.refresh(user)
+    return user
 
+
+def upsert_user_from_kioubit(db: Session, data: dict[str, Any], settings: Settings) -> User:
+    asn = str(data["asn"])
+    user = _upsert_user_for_asn(db, asn, settings, first_email=data.get("first_email"))
     identity = ASNIdentity(
         user_id=user.id,
         asn=asn,
@@ -73,6 +89,20 @@ def upsert_user_from_kioubit(db: Session, data: dict[str, Any], settings: Settin
         allowed6_json=json.dumps(data.get("allowed6", [])),
         authtype=data.get("authtype"),
     )
+    db.add(identity)
+    db.commit()
+    return user
+
+
+def upsert_user_from_findnoc(db: Session, asn_number: str, settings: Settings) -> User:
+    """Create/update the User for a FindNOC-verified ASN and record a minimal identity row.
+
+    ``asn_number`` is the bare numeric ASN (already normalised via ``normalize_asn_number``).
+    FindNOC supplies no maintainer/route metadata, so the ``ASNIdentity`` keeps its empty-list
+    defaults and only records ``authtype="findnoc"`` so the audit log shows how it was verified.
+    """
+    user = _upsert_user_for_asn(db, asn_number, settings)
+    identity = ASNIdentity(user_id=user.id, asn=asn_number, authtype="findnoc")
     db.add(identity)
     db.commit()
     return user

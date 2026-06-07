@@ -140,6 +140,8 @@ corresponding router's `config.json`.
 | `TELEGRAM_BOT_TOKEN` | _(empty)_ | BotFather token; required for the bot. |
 | `TELEGRAM_BACKEND_SECRET` | `dev-telegram-secret` | Shared secret between bot and backend. **Must** be changed. |
 | `TELEGRAM_BACKEND_URL` | _(falls back to `DOMAIN`)_ | Internal URL the bot uses to reach the backend — keep `http://127.0.0.1:8000` when co-located. |
+| `FINDNOC_API_URL` | `https://findnoc.ox5.cc` | FindNOC base URL for the optional Telegram quick login. |
+| `FINDNOC_API_TOKEN` | _(empty)_ | FindNOC API token. When set, the bot's `/login` tries FindNOC first (falls back to Kioubit); empty disables it. |
 | `ALLOW_INSECURE_DEFAULTS` | `0` | `1` tolerates placeholder secrets (local testing). |
 | `LG_RATE_LIMIT` | `20` | Max looking-glass queries per window per client IP (`0` disables). |
 | `LG_RATE_WINDOW_SECONDS` | `60` | Rate-limit window length. |
@@ -185,7 +187,7 @@ such as `1.1.1.0/24` both resolve to the route actually used.
 ## Telegram
 
 ```text
-/login                 Login your DN42 asn (Kioubit)
+/login                 Login your DN42 asn (FindNOC quick login, else Kioubit)
 /logout                Logout your DN42 asn (unlink; your peers are kept)
 /listpeers             your peers: our endpoint/pubkey/tunnel IP, WireGuard + BGP status
 /create                create a peer (guided wizard)

@@ -131,6 +131,8 @@ agent 產生 bearer token。請將該 token 設為對應路由器 `config.json` 
 | `TELEGRAM_BOT_TOKEN` | _（空）_ | BotFather token；bot 必需。 |
 | `TELEGRAM_BACKEND_SECRET` | `dev-telegram-secret` | bot 與後端間的共享密鑰。**必須**更換。 |
 | `TELEGRAM_BACKEND_URL` | _（退回 `DOMAIN`）_ | bot 連到後端所用的內部 URL——同機時維持 `http://127.0.0.1:8000`。 |
+| `FINDNOC_API_URL` | `https://findnoc.ox5.cc` | FindNOC 基底 URL，供選用的 Telegram 快速登入。 |
+| `FINDNOC_API_TOKEN` | _（空）_ | FindNOC API token。設定後 bot 的 `/login` 會先試 FindNOC（失敗則回退 Kioubit）；留空即停用。 |
 | `ALLOW_INSECURE_DEFAULTS` | `0` | `1` 容忍佔位密鑰（本地測試）。 |
 | `LG_RATE_LIMIT` | `20` | 每個來源 IP 每個窗口的 looking-glass 查詢上限（`0` 停用）。 |
 | `LG_RATE_WINDOW_SECONDS` | `60` | 速率限制窗口長度。 |
@@ -174,7 +176,7 @@ agent 端解析）；`route` 採最長前綴查找,故單一主機 IP 或 `1.1.1
 ## Telegram
 
 ```text
-/login                 登入你的 dn42 ASN（Kioubit）
+/login                 登入你的 dn42 ASN（FindNOC 快速登入，否則 Kioubit）
 /logout                登出你的 dn42 ASN（解除連結；對等保留）
 /listpeers             你的對等：我方端點／公鑰／隧道內 IP、WireGuard 與 BGP 狀態
 /create                建立對等（引導式精靈）

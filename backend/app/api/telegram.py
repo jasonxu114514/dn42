@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from app.auth.findnoc import FindNocError, query_user_asns, verify_control
 from app.auth.kioubit import KioubitAuthError, KioubitVerifier
 from app.auth.service import (
     bind_telegram,
@@ -13,6 +14,7 @@ from app.auth.service import (
     create_challenge,
     get_user_by_telegram,
     unbind_telegram,
+    upsert_user_from_findnoc,
     upsert_user_from_kioubit,
 )
 from app.config import get_settings
@@ -21,6 +23,7 @@ from app.db.session import get_db
 from app.lg.client import AgentClient
 from app.peer.config import peer_protocol_name, peering_info
 from app.peer.service import create_peer, delete_peer, derive_link_addresses, update_peer
+from app.peer.validation import normalize_asn_number
 
 router = APIRouter(prefix="/api/telegram", tags=["telegram"])
 
@@ -93,6 +96,17 @@ class LogoutRequest(BaseModel):
     telegram_user_id: str = Field(pattern=r"^\d{1,20}$")
 
 
+class FindNocLoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    telegram_user_id: str = Field(pattern=r"^\d{1,20}$")
+    telegram_chat_id: str = Field(pattern=r"^-?\d{1,20}$")
+    username: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_]{1,64}$")
+    # Optional: the ASN the user picked from a multi-ASN result. Re-checked against FindNOC and
+    # normalised in the handler (reusing normalize_asn_number).
+    asn: str | None = Field(default=None, max_length=16)
+
+
 def require_bot_secret(x_backend_secret: str = Header("")) -> None:
     """Guard the bot-only API: the shared secret must match in constant time.
 
@@ -147,6 +161,59 @@ def telegram_verify(payload: VerifyRequest, db: Session = Depends(get_db)) -> di
         "effective_mnt": data.get("effective_mnt"),
         "authtype": data.get("authtype"),
     }
+
+
+@router.post("/findnoc/login", dependencies=[Depends(require_bot_secret)])
+async def telegram_findnoc_login(
+    payload: FindNocLoginRequest, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """Quick Telegram login via FindNOC: bind the caller's verified UID to the ASN it controls.
+
+    Status contract the bot relies on: 404 = UID not in FindNOC, 503 = feature off / upstream down
+    (both → the bot falls back to Kioubit), 400 = a real error to surface (only on the asn path).
+    The UID is the bot-vouched Telegram sender id, and the ASN is always re-checked against the live
+    FindNOC API, so a client-supplied ``asn`` cannot grant access FindNOC does not confirm.
+    透過 FindNOC 快速登入:404=UID 不在 FindNOC、503=未設定/上游故障(兩者皆使 bot 回退 Kioubit)、
+    400=須回報的錯誤。ASN 一律對 FindNOC 即時複查,故用戶端帶入的 asn 無法越權。
+    """
+    settings = get_settings()
+    if not settings.findnoc_enabled:
+        raise HTTPException(status_code=503, detail="FindNOC login is not configured")
+    uid = payload.telegram_user_id
+    try:
+        if payload.asn is not None:
+            try:
+                asn_number = normalize_asn_number(payload.asn)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if not await verify_control(uid, asn_number, settings):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"FindNOC has no record that you control AS{asn_number}",
+                )
+            asns = [asn_number]
+        else:
+            asns = await query_user_asns(uid, settings)
+            if not asns:
+                raise HTTPException(
+                    status_code=404, detail="Your Telegram account is not registered in FindNOC"
+                )
+            if len(asns) > 1:
+                # Let the user pick; the chosen ASN comes back on a follow-up call and is verified.
+                return {"need_choice": True, "asns": [f"AS{a}" for a in asns]}
+    except FindNocError as exc:
+        raise HTTPException(status_code=503, detail="FindNOC is currently unavailable") from exc
+
+    asn_number = asns[0]
+    user = upsert_user_from_findnoc(db, asn_number, settings)
+    bind_telegram(
+        db,
+        user,
+        telegram_user_id=payload.telegram_user_id,
+        telegram_chat_id=payload.telegram_chat_id,
+        username=payload.username,
+    )
+    return {"ok": True, "asn": user.primary_asn, "method": "findnoc"}
 
 
 @router.post("/logout", dependencies=[Depends(require_bot_secret)])

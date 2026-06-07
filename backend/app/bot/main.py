@@ -341,8 +341,25 @@ async def help_cmd(message: Message) -> None:
     await message.answer(HELP_TEXT)
 
 
-@dp.message(Command("login"), default_state)
-async def login_cmd(message: Message) -> None:
+def findnoc_choice_keyboard(asns: list[str]) -> InlineKeyboardMarkup:
+    """One button per ASN for the multi-ASN FindNOC case; the tapped ASN rides in callback_data."""
+    rows = [[InlineKeyboardButton(text=asn, callback_data=f"fnlogin:{asn}")] for asn in asns]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def findnoc_success_text(data: dict) -> str:
+    return (
+        "Logged in via FindNOC quick verification.\n"
+        f"ASN: AS{data['asn']}\n"
+        "Your Telegram account is now linked. Use /create to add a peer."
+    )
+
+
+async def kioubit_login(message: Message) -> None:
+    """Send the Kioubit Mini App verification button (original /login flow + FindNOC fallback).
+
+    傳送 Kioubit Mini App 驗證按鈕:既是原本的 /login 流程,也是 FindNOC 無法使用時的回退。
+    """
     data = await call_backend(
         message,
         backend.post("/api/telegram/challenge", user_payload(message)),
@@ -373,6 +390,64 @@ async def login_cmd(message: Message) -> None:
         one_time_keyboard=True,
     )
     await message.answer("Open the app to verify your dn42 ASN:", reply_markup=keyboard)
+
+
+@dp.message(Command("login"), default_state)
+async def login_cmd(message: Message) -> None:
+    """Try FindNOC quick login first; fall back to the Kioubit Mini App when it can't be used.
+
+    先試 FindNOC 快速登入(零額外操作);未註冊／未設定／上游故障時靜默回退到 Kioubit Mini App。
+    """
+    try:
+        data = await backend.post(
+            "/api/telegram/findnoc/login",
+            {**user_payload(message), "username": message.from_user.username},
+        )
+    except httpx.HTTPStatusError as exc:
+        # 404 = not in FindNOC, 503 = FindNOC off/unavailable → both fall back to Kioubit.
+        if exc.response.status_code in (404, 503):
+            await kioubit_login(message)
+        else:
+            await message.answer(f"Login failed: {detail_of(exc)}")
+        return
+    except httpx.HTTPError:
+        # Backend unreachable; the Kioubit path needs it too, but follow the standard flow.
+        await kioubit_login(message)
+        return
+
+    if data.get("need_choice"):
+        await message.answer(
+            "You control multiple ASNs in FindNOC — pick the one to log in with:",
+            reply_markup=findnoc_choice_keyboard(data["asns"]),
+        )
+        return
+    await message.answer(findnoc_success_text(data))
+
+
+@dp.callback_query(F.data.startswith("fnlogin:"))
+async def fnlogin_choose(callback: CallbackQuery) -> None:
+    """Bind the ASN tapped from the multi-ASN FindNOC list; the backend re-verifies it."""
+    asn = callback.data.split(":", 1)[1]
+    try:
+        data = await backend.post(
+            "/api/telegram/findnoc/login",
+            {
+                "telegram_user_id": str(callback.from_user.id),
+                "telegram_chat_id": str(callback.message.chat.id),
+                "username": callback.from_user.username,
+                "asn": asn,
+            },
+        )
+    except httpx.HTTPStatusError as exc:
+        await callback.answer()
+        await callback.message.answer(f"Login failed: {detail_of(exc)}")
+        return
+    except httpx.HTTPError as exc:
+        await callback.answer()
+        await callback.message.answer(f"Login failed: {exc}")
+        return
+    await callback.answer("Verified")
+    await callback.message.answer(findnoc_success_text(data))
 
 
 @dp.message(F.web_app_data)

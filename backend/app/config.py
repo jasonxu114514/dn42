@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     telegram_backend_secret: str = "dev-telegram-secret"
     telegram_backend_url: str = ""
 
+    # Optional FindNOC integration (https://findnoc.ox5.cc): a third-party lookup that maps a
+    # Telegram UID to the dn42 ASN(s) it controls, used as a lighter alternative to the Kioubit
+    # Mini App for the bot's /login. Leave the token blank to disable the feature entirely.
+    # 選用的 FindNOC 整合:以 Telegram UID 反查其掌控的 dn42 ASN,作為 bot /login 比 Kioubit
+    # Mini App 更輕量的替代方案;token 留空即停用此功能。
+    findnoc_api_url: str = "https://findnoc.ox5.cc"
+    findnoc_api_token: str = ""
+
     allow_insecure_defaults: bool = False
     lg_rate_limit: int = 20
     lg_rate_window_seconds: int = 60
@@ -59,6 +67,11 @@ class Settings(BaseSettings):
         domain = self.domain.strip().rstrip("/")
         parsed = urlsplit(domain if "://" in domain else f"//{domain}")
         return (parsed.netloc or parsed.path).rstrip("/")
+
+    @property
+    def findnoc_enabled(self) -> bool:
+        """FindNOC quick login is available only when an API token is configured."""
+        return bool(self.findnoc_api_token.strip())
 
 
 @lru_cache

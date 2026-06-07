@@ -21,6 +21,7 @@ from app.config import get_settings
 from app.db.models import Agent, PeerRequest
 from app.db.session import get_db
 from app.lg.client import AgentClient
+from app.lg.summary import summarize_peer_bird, summarize_wireguard
 from app.peer.config import peer_protocol_name, peering_info
 from app.peer.service import create_peer, delete_peer, derive_link_addresses, update_peer
 from app.peer.validation import MAX_WIREGUARD_MTU, MIN_WIREGUARD_MTU, normalize_asn_number
@@ -399,8 +400,8 @@ async def telegram_status(
         try:
             result = await client.peer_status(agent, protocol_name)
             return {
-                "detail": str(result.get("output", result)),
-                "wg_detail": str(result.get("wireguard", "")),
+                "detail": summarize_peer_bird(str(result.get("output", ""))),
+                "wg_detail": summarize_wireguard(str(result.get("wireguard", ""))),
             }
         except Exception as exc:  # noqa: BLE001 - one dead agent must not fail the batch
             return {"detail": f"status unavailable: {exc}", "wg_detail": ""}

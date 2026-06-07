@@ -15,9 +15,10 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.agent_ws import agent_runtime_context
 from app.auth.service import unbind_telegram
-from app.db.models import ASNIdentity, Agent, LGQuery, PeerRequest, TelegramBinding, User
+from app.db.models import Agent, ASNIdentity, LGQuery, PeerRequest, TelegramBinding, User
 from app.db.session import get_db
-from app.peer.config import render_operator_config
+from app.lg.client import AgentClient
+from app.peer.config import peer_protocol_name, render_operator_config
 from app.peer.deploy import fetch_agent_public_key
 from app.peer.service import (
     create_peer,
@@ -573,6 +574,52 @@ def admin_peer_config(
             "subtitle": f"WireGuard + BIRD snippets for AS{peer.asn} on {peer.agent.name}.",
             "config": render_operator_config(peer, peer.agent, settings.local_asn or "<our-asn>"),
             "back_url": "/admin/peers",
+        },
+        user=user,
+        active="admin",
+    )
+
+
+@router.get("/admin/peers/{peer_id}/status", response_class=HTMLResponse)
+async def admin_peer_status(
+    peer_id: int,
+    request: Request,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Show one peer's full live WireGuard + BIRD status, fetched from its PoP agent.
+
+    The complete, unmodified command output — the bot's ``/listpeers`` shows only key info. A dead
+    or disabled agent renders a notice instead of failing the page.
+    """
+    peer = (
+        db.query(PeerRequest)
+        .options(joinedload(PeerRequest.agent))
+        .filter(PeerRequest.id == peer_id)
+        .one_or_none()
+    )
+    if peer is None:
+        raise HTTPException(status_code=404, detail="Peer not found")
+    agent = peer.agent
+    protocol_name = peer_protocol_name(peer, agent)
+    bird = wg = ""
+    error = None
+    try:
+        result = await AgentClient().peer_status(agent, protocol_name)
+        bird = str(result.get("output", "")).strip()
+        wg = str(result.get("wireguard", "")).strip()
+    except Exception as exc:  # noqa: BLE001 - surface agent errors as a notice, never a 500
+        error = f"Could not fetch live status from {agent.name}: {exc}"
+    return render(
+        request,
+        "admin/peer_status.html",
+        {
+            "peer": peer,
+            "agent": agent,
+            "protocol_name": protocol_name,
+            "bird": bird,
+            "wg": wg,
+            "error": error,
         },
         user=user,
         active="admin",

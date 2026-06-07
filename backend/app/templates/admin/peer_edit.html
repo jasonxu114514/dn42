@@ -53,6 +53,7 @@
       <button type="submit" class="btn-secondary btn-sm">Redeploy</button>
     </form>
     <a href="/admin/peers/{{ peer.id }}/config" class="btn btn-ghost btn-sm">View config</a>
+    <a href="/admin/peers/{{ peer.id }}/status" class="btn btn-ghost btn-sm">View live status</a>
   </div>
   {% if peer.deploy_output %}
   <div class="status-label">Last deploy output</div>

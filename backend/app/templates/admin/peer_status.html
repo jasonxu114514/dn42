@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% from "macros.html" import page_header, code_block %}
+{% block title %}Peer #{{ peer.id }} live status · {{ settings.app_name }}{% endblock %}
+{% block content %}
+<div class="card">
+  {{ page_header("Peer #" ~ peer.id ~ " · AS" ~ peer.asn ~ " live status",
+                 "WireGuard + BIRD status on " ~ agent.name ~ " (" ~ protocol_name ~ ").") }}
+  {% if error %}
+  <pre class="terminal bad">{{ error }}</pre>
+  {% else %}
+  <div class="status-label">BIRD session</div>
+  {{ code_block(bird or "(no output)") }}
+  <div class="status-label" style="margin-top:16px">WireGuard tunnel</div>
+  {{ code_block(wg or "(no output)") }}
+  {% endif %}
+  <p style="margin-top:16px">
+    <a class="btn btn-ghost btn-sm" href="/admin/peers/{{ peer.id }}/status">↻ Refresh</a>
+    <a class="btn btn-ghost btn-sm" href="/admin/peers/{{ peer.id }}/edit">← Back to peer</a>
+  </p>
+</div>
+{% endblock %}

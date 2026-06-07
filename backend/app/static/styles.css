@@ -177,3 +177,20 @@ td select {
 .terminal.bad {
   border-left: 4px solid var(--bad);
 }
+
+/* Compact variant of .terminal for the inline "our side" peering details under a deployed peer. */
+.peering {
+  overflow-x: auto;
+  margin: 0;
+  padding: 12px 14px;
+  background: #111827;
+  color: #e5e7eb;
+  border-radius: 6px;
+  border-left: 4px solid var(--ok);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.peer-detail td {
+  padding-top: 0;
+}

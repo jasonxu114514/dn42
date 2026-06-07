@@ -24,6 +24,7 @@ const (
 	defaultWgQuickPath    = "wg-quick"
 	defaultWireGuardDir   = "/etc/wireguard"
 	defaultBirdPeerDir    = "/etc/bird/peers"
+	defaultBirdPeerGroup  = "bird"
 )
 
 // Config is the agent's full runtime configuration. Field defaults are applied by applyDefaults
@@ -52,7 +53,20 @@ type Config struct {
 
 	WireGuardPeerDir string `json:"wireguard_peer_dir"`
 	BirdPeerDir      string `json:"bird_peer_dir"`
-	DeployReloadCmd  string `json:"deploy_reload_cmd"`
+	// BirdPeerGroup is the group that should own the BIRD peer dir and the per-peer snippet files the
+	// agent writes. The agent runs as root, but the BIRD daemon runs unprivileged (typically user
+	// `bird`) and could not otherwise read root-owned snippets, so `birdc configure` fails with
+	// "Permission denied". The agent sets only the group (mode stays 0750/0640, never world-readable).
+	// A pointer distinguishes "unset" (nil -> default "bird") from an explicit "" that disables the
+	// chown — for operators who run BIRD as root or manage the group via a setgid dir. WireGuard files
+	// are never chowned: they hold the private key and stay root-only.
+	// BirdPeerGroup 為應擁有 BIRD 對等目錄與各對等片段檔(由 agent 寫入)的群組。agent 以 root 執行,但
+	// BIRD 守護程序以非特權身分(通常是 `bird` 使用者)執行,否則無法讀取 root 擁有的片段,使
+	// `birdc configure` 以「Permission denied」失敗。agent 僅設定群組(權限位維持 0750/0640,絕不全域
+	// 可讀)。以指標區分「未設定」(nil → 預設 "bird")與明確的 ""(停用 chown,適用於以 root 執行 BIRD
+	// 或以 setgid 目錄管理群組者)。WireGuard 檔案永不 chown:它們含私鑰,維持僅 root。
+	BirdPeerGroup   *string `json:"bird_peer_group"`
+	DeployReloadCmd string  `json:"deploy_reload_cmd"`
 
 	WireGuardPrivateKey string `json:"wireguard_private_key"`
 	WireGuardPublicKey  string `json:"wireguard_public_key"`
@@ -116,6 +130,18 @@ func (c Config) Concurrency() int {
 // Timeout 以 time.Duration 回傳每個命令的逾時。
 func (c Config) Timeout() time.Duration {
 	return time.Duration(c.CommandTimeoutSeconds) * time.Second
+}
+
+// BirdGroup resolves the group that should own the BIRD peer dir and snippet files: nil (the key is
+// unset) yields the default "bird", while an explicit "" disables the chown entirely. The value is
+// trimmed so trailing whitespace in the config never leaks into a group lookup.
+// BirdGroup 解析應擁有 BIRD 對等目錄與片段檔的群組:nil(未設定該鍵)回傳預設 "bird",明確的 "" 則
+// 完全停用 chown。回傳值經修剪,使設定中的尾端空白不致流入群組查找。
+func (c Config) BirdGroup() string {
+	if c.BirdPeerGroup == nil {
+		return defaultBirdPeerGroup
+	}
+	return strings.TrimSpace(*c.BirdPeerGroup)
 }
 
 func orDefault(value, fallback string) string {

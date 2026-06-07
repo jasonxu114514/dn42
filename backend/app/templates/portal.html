@@ -32,7 +32,8 @@
   <table>
     <thead><tr><th>ID</th><th>ASN</th><th>Agent</th><th>Status</th><th>Deploy</th><th>Config</th></tr></thead>
     <tbody>
-      {% for peer in peers %}
+      {% for item in peers %}
+        {% set peer = item.peer %}
         <tr>
           <td>#{{ peer.id }}</td>
           <td>{{ peer.asn }}</td>
@@ -41,6 +42,16 @@
           <td>{{ peer.deploy_status }}</td>
           <td><a href="/portal/peers/{{ peer.id }}/config">view</a></td>
         </tr>
+        {% if peer.deploy_status == "deployed" %}
+          <tr class="peer-detail">
+            <td colspan="6">
+              <p class="muted">Configure your side with our details:</p>
+              <pre class="peering">Endpoint   = {{ item.peering.endpoint }}
+PublicKey  = {{ item.peering.public_key }}
+Our tunnel IP (your BGP neighbor) = {{ item.peering.tunnel_ip }}</pre>
+            </td>
+          </tr>
+        {% endif %}
       {% endfor %}
     </tbody>
   </table>

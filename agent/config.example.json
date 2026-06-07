@@ -9,7 +9,8 @@
   "wg_quick_path": "/usr/bin/wg-quick",
   "wireguard_peer_dir": "/etc/wireguard",
   "bird_peer_dir": "/etc/bird/peers",
-  "deploy_reload_cmd": "systemctl reload bird",
+  "bird_peer_group": "bird",
+  "deploy_reload_cmd": "birdc c",
   "wireguard_private_key": "change-me",
   "wireguard_public_key": "change-me"
 }

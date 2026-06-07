@@ -7,8 +7,10 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +25,7 @@ type Runner struct {
 	Timeout          time.Duration
 	WireGuardPeerDir string
 	BirdPeerDir      string
+	BirdPeerGroup    string
 	DeployReloadCmd  string
 	WireGuardKey     string
 	WireGuardPubKey  string
@@ -85,6 +88,7 @@ func New(cfg config.Config) Runner {
 		Timeout:          cfg.Timeout(),
 		WireGuardPeerDir: cfg.WireGuardPeerDir,
 		BirdPeerDir:      cfg.BirdPeerDir,
+		BirdPeerGroup:    cfg.BirdGroup(),
 		DeployReloadCmd:  cfg.DeployReloadCmd,
 		WireGuardKey:     cfg.WireGuardPrivateKey,
 		WireGuardPubKey:  cfg.WireGuardPublicKey,
@@ -313,6 +317,18 @@ func (r Runner) DeployPeer(req DeployRequest) DeployResult {
 	if err := writeConfigFile(files[1], req.BirdConfig+"\n"); err != nil {
 		return DeployResult{OK: false, Output: err.Error(), Files: files}
 	}
+	// The agent runs as root, but the BIRD daemon runs unprivileged (typically user `bird`); give the
+	// BIRD peer dir and its snippet that group so `birdc configure` can read the include without
+	// loosening the 0750/0640 mode. The WireGuard file is left root-only (it holds the private key).
+	// agent 以 root 執行,但 BIRD 守護程序以非特權身分(通常是 `bird` 使用者)執行;將 BIRD 對等目錄與
+	// 其片段設為該群組,使 `birdc configure` 能讀取 include 而不放寬 0750/0640 權限。WireGuard 檔案維持
+	// 僅 root(其含私鑰)。
+	if err := chownToGroup(r.BirdPeerDir, r.BirdPeerGroup); err != nil {
+		return DeployResult{OK: false, Output: err.Error(), Files: files}
+	}
+	if err := chownToGroup(files[1], r.BirdPeerGroup); err != nil {
+		return DeployResult{OK: false, Output: err.Error(), Files: files}
+	}
 
 	output := "deployed peer config"
 	down := r.run(r.WgQuickPath, "down", files[0])
@@ -442,6 +458,37 @@ func ensureChildPath(parent string, child string) error {
 	}
 	if rel == "." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." {
 		return fmt.Errorf("refusing to write outside %s", parentAbs)
+	}
+	return nil
+}
+
+// chownToGroup sets only the group owner of path (the user owner is left unchanged) to group, so the
+// unprivileged BIRD daemon — typically user `bird` — can read peer configs the root-run agent writes.
+// The mode bits stay at their restrictive 0750/0640, so files never become world-readable; only the
+// group is corrected from root to e.g. `bird`. An empty group disables this (operators who run BIRD
+// as root, or manage the group via a setgid dir). WireGuard files are never passed here — they hold
+// the private key and must stay root-only. A missing group is a hard error so a misconfigured
+// bird_peer_group surfaces at deploy time rather than as a later silent "Permission denied".
+// chownToGroup 僅將 path 的群組擁有者(保留使用者擁有者不變)設為 group,使以非特權身分(通常是
+// `bird` 使用者)執行的 BIRD 守護程序能讀取由 root 執行的 agent 所寫入的對等設定。權限位維持嚴格的
+// 0750/0640,檔案不會變成全域可讀;僅將群組由 root 修正為例如 `bird`。空字串則停用此行為(適用於以
+// root 執行 BIRD,或以 setgid 目錄管理群組者)。WireGuard 檔案永不傳入此處——它們含私鑰,必須維持僅
+// root 可存取。找不到群組視為硬性錯誤,使設定錯誤的 bird_peer_group 在部署時即浮現,而非日後默默的
+// 「Permission denied」。
+func chownToGroup(path string, group string) error {
+	if group == "" {
+		return nil
+	}
+	g, err := user.LookupGroup(group)
+	if err != nil {
+		return fmt.Errorf("bird_peer_group %q not found: %w", group, err)
+	}
+	gid, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return fmt.Errorf("bird_peer_group %q has invalid gid %q: %w", group, g.Gid, err)
+	}
+	if err := os.Chown(path, -1, gid); err != nil {
+		return fmt.Errorf("set group %q on %s: %w", group, path, err)
 	}
 	return nil
 }

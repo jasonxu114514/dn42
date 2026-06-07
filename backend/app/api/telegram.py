@@ -18,7 +18,7 @@ from app.config import get_settings
 from app.db.models import Agent, PeerRequest
 from app.db.session import get_db
 from app.lg.client import AgentClient
-from app.peer.config import peer_protocol_name
+from app.peer.config import peer_protocol_name, peering_info
 from app.peer.service import create_peer, delete_peer, derive_link_addresses, update_peer
 
 router = APIRouter(prefix="/api/telegram", tags=["telegram"])
@@ -197,6 +197,9 @@ def _peer_summary(peer: PeerRequest) -> dict[str, Any]:
         "asn": peer.asn,
         "deploy_status": peer.deploy_status,
         "deploy_output": peer.deploy_output,
+        # The "our side" details the peer needs to configure their end; the bot shows these once
+        # the deploy succeeds. 部署成功後 bot 會把這些「我方」參數回給使用者設定對端。
+        "peering": peering_info(peer, peer.agent),
     }
 
 
@@ -289,11 +292,6 @@ async def telegram_status(
         .order_by(PeerRequest.created_at.desc())
         .all()
     )
-    # Resolve every agent (lazy load) before awaiting so the Session is never touched inside gather.
-    targets = [
-        (peer.id, peer.agent, peer.asn, peer.deploy_status, peer_protocol_name(peer, peer.agent))
-        for peer in peers
-    ]
 
     client = AgentClient()
 
@@ -304,21 +302,30 @@ async def telegram_status(
         except Exception as exc:  # noqa: BLE001 - one dead agent must not fail the batch
             return f"status unavailable: {exc}"
 
-    details = await asyncio.gather(
-        *(fetch(agent, proto) for _id, agent, _asn, _ds, proto in targets)
-    )
+    # Read every ORM field (agent, peering, protocol name) up front so the Session is never touched
+    # inside the gather below; the per-peer BGP queries then run concurrently over loaded data.
+    # 先一次讀完所有 ORM 欄位,之後 gather 內僅做網路查詢,不再碰 Session。
+    snapshots: list[dict[str, Any]] = []
+    fetches = []
+    for peer in peers:
+        agent = peer.agent
+        snapshots.append(
+            {
+                "id": peer.id,
+                "agent": agent.name,
+                "asn": peer.asn,
+                "status": peer.status,
+                "endpoint": peer.endpoint,
+                "deploy_status": peer.deploy_status,
+                "peering": peering_info(peer, agent),
+            }
+        )
+        fetches.append(fetch(agent, peer_protocol_name(peer, agent)))
+
+    details = await asyncio.gather(*fetches)
     return {
         "asn": user.primary_asn,
         "peers": [
-            {
-                "id": pid,
-                "agent": agent.name,
-                "asn": asn,
-                "deploy_status": deploy_status,
-                "detail": detail,
-            }
-            for (pid, agent, asn, deploy_status, _proto), detail in zip(
-                targets, details, strict=True
-            )
+            {**snap, "detail": detail} for snap, detail in zip(snapshots, details, strict=True)
         ],
     }

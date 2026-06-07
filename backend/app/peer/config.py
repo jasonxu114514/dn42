@@ -36,7 +36,37 @@ def local_default_link_ip(local_asn: str) -> str:
 
 
 def peer_protocol_name(peer: PeerRequest, agent: Agent) -> str:
-    return f"dn42p{peer.id}"
+    """WireGuard interface, ``.conf`` filenames, and BIRD protocol name for this peer.
+
+    Format is ``DN42_<last4>`` where ``<last4>`` is the last four digits of the peer's ASN. dn42
+    ASNs (``424242xxxx``) are uniquely identified by those four digits, and a PoP peers with any
+    ASN at most once, so this never collides within a PoP. ``wg-quick`` names the interface after
+    the config filename, so all three stay in sync from this one value (≤15-char interface limit,
+    and it satisfies the agent's ``safeNameRE``).
+
+    本對等的 WireGuard 介面、設定檔名與 BIRD protocol 名,格式為 ``DN42_<對方 ASN 後 4 位>``。
+    """
+    return f"DN42_{normalize_asn_number(peer.asn)[-4:]}"
+
+
+def peering_info(peer: PeerRequest, agent: Agent) -> dict[str, str]:
+    """The "our side" parameters a peer needs to bring their tunnel up after a successful deploy.
+
+    ``endpoint`` is the WireGuard endpoint they dial (agent host + ASN-derived listen port),
+    ``public_key`` is this PoP's WireGuard key, and ``tunnel_ip`` is our in-tunnel (link-local)
+    address — which is also the BGP neighbor address their side should point at. The public key
+    falls back to the visible placeholder (as in ``render_user_config``) when the PoP key has not
+    been fetched yet, so the peer is never silently handed a blank key.
+
+    對端在部署成功後建立隧道所需的「我方」參數:``endpoint`` 為對端撥號的 WireGuard 端點(agent 主機
+    + 由 ASN 推導的監聽埠),``public_key`` 為本 PoP 的 WireGuard 公鑰,``tunnel_ip`` 為我方隧道內
+    (link-local)位址,亦即對端 BGP 應指向的鄰居位址。公鑰未抓取時退回可見佔位字串。
+    """
+    return {
+        "endpoint": agent_wireguard_endpoint(peer, agent),
+        "public_key": agent.wg_public_key or "<our-wireguard-public-key>",
+        "tunnel_ip": local_link_ip(peer),
+    }
 
 
 def render_user_config(peer: PeerRequest, agent: Agent, local_asn: str = "<our-asn>") -> str:

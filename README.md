@@ -62,9 +62,12 @@ agent that applies them. Peers can be created from a web portal or a Telegram bo
 3. The backend **validates** every field, enforces **one peer per ASN per PoP**, **auto-approves**
    the peer, renders the WireGuard + BIRD2 snippets, and `POST`s them to the agent's
    `/v1/peers/deploy`.
-4. The agent writes `dn42p<peer-id>.conf` for WireGuard and BIRD, runs `wg-quick down/up`, and
+4. The agent writes `DN42_<asn-last4>.conf` for WireGuard and BIRD, runs `wg-quick down/up`, and
    reloads BIRD if configured.
-5. **Deleting or disabling** a peer tears it down on the router (`/v1/peers/remove`: `wg-quick down`
+5. On a successful deploy, the portal and the bot show the **our-side** parameters the peer needs to
+   bring up their end: our WireGuard endpoint, our public key for that PoP, and our in-tunnel
+   (link-local) address — which is also the BGP neighbor address their side points at.
+6. **Deleting or disabling** a peer tears it down on the router (`/v1/peers/remove`: `wg-quick down`
    plus snippet removal), so revoked peers stop forwarding immediately.
 
 The WireGuard listen port is derived from the remote ASN's last five digits (`4242420090` →
@@ -160,6 +163,7 @@ WireGuard private key), so keep it root-owned and `chmod 0600`.
 | `command_timeout_seconds` | `12` | Timeout for each external command (`ping`/`traceroute`/`birdc`/`wg-quick`). |
 | `birdc_path` / `traceroute_path` / `ping_path` / `wg_quick_path` | `birdc` / `traceroute` / `ping` / `wg-quick` | Tool paths. |
 | `wireguard_peer_dir` / `bird_peer_dir` | `/etc/wireguard` / `/etc/bird/peers` | Per-peer snippet directories. |
+| `bird_peer_group` | `bird` | Group given to the BIRD peer dir + snippets so the unprivileged BIRD daemon can read them (mode stays `0750`/`0640`, not world-readable). `""` disables it (BIRD runs as root / managed via a setgid dir). |
 | `wireguard_private_key` | _(empty)_ | Router private key substituted into generated WireGuard configs. |
 | `wireguard_public_key` | _(required)_ | Router public key for this PoP. The agent refuses to start without a valid value and serves it on `GET /v1/pubkey`; the backend caches it and fills it into each peer's generated config. |
 | `deploy_reload_cmd` | _(empty)_ | Command run (fixed argv) after writing files, e.g. `systemctl reload bird`. |
@@ -182,8 +186,7 @@ such as `1.1.1.0/24` both resolve to the route actually used.
 
 ```text
 /login                 link your dn42 ASN (Kioubit)
-/peer                  list your peers
-/status                detailed BGP status of your own peers
+/peer, /status         your peers: state, our-side params, and live BGP status
 /create                create a peer (guided wizard)
 /edit                  edit one of your peers (guided wizard)
 /delete                delete one of your peers (guided wizard)
@@ -210,8 +213,9 @@ backend testing without Telegram, use `python start.py --allow-http`.
 
 ## Agent
 
-WireGuard configs are complete `wg-quick` files written as `dn42p<peer-id>.conf`; the agent runs
-`wg-quick down`/`up` and then reloads BIRD if `deploy_reload_cmd` is set. BIRD snippets follow
+WireGuard configs are complete `wg-quick` files written as `DN42_<asn-last4>.conf` (the WireGuard
+interface and BIRD protocol share this name, derived from the peer ASN's last four digits); the
+agent runs `wg-quick down`/`up` and then reloads BIRD if `deploy_reload_cmd` is set. BIRD snippets follow
 the dn42 wiki MP-BGP-over-IPv6 (Extended Next Hop) style, so your main BIRD config must define a
 `template bgp dnpeers` and include the peer directory, for example:
 

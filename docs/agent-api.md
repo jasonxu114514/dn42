@@ -76,11 +76,11 @@ Body:
 ```json
 {
   "request_id": 12,
-  "asn": "4242420000",
+  "asn": "4242420090",
   "agent": "local",
-  "protocol_name": "dn42p12",
+  "protocol_name": "DN42_0090",
   "wireguard_config": "[Interface]\nPrivateKey = {{WIREGUARD_PRIVATE_KEY}}\nListenPort = 20090\n",
-  "bird_config": "protocol bgp dn42p12 { ... }\n"
+  "bird_config": "protocol bgp DN42_0090 { ... }\n"
 }
 ```
 
@@ -89,6 +89,11 @@ The agent validates the request, replaces `{{WIREGUARD_PRIVATE_KEY}}` with the
 snippet, runs `wg-quick down/up` for the WireGuard file, and returns the written file paths. If
 `deploy_reload_cmd` is set, it is split into fixed argv and run after the files are written.
 
+The BIRD peer directory and its snippet are group-owned by `bird_peer_group` (default `bird`, mode
+left at `0750`/`0640`) so the unprivileged BIRD daemon can read the include when `birdc configure`
+runs; set `bird_peer_group` to `""` to disable this. The WireGuard file is never chowned — it holds
+the private key and stays root-only.
+
 ## `POST /v1/peers/remove`
 
 Body:
@@ -96,7 +101,7 @@ Body:
 ```json
 {
   "request_id": 12,
-  "protocol_name": "dn42p12"
+  "protocol_name": "DN42_0090"
 }
 ```
 
@@ -111,7 +116,7 @@ Body:
 
 ```json
 {
-  "protocol_name": "dn42p12"
+  "protocol_name": "DN42_0090"
 }
 ```
 
@@ -122,9 +127,9 @@ birdc show protocols all <protocol_name>
 ```
 
 Returns the detailed BIRD state for a single peer (BGP state, last error such as `Connection
-reset`, route counts). Used by the Telegram `/status` command, which queries each of the caller's
-own peers. `protocol_name` is validated against the same safe-name pattern as deploy/remove, and
-the call is bounded by `max_concurrency` like the other looking-glass reads.
+reset`, route counts). Used by the Telegram `/peer` (alias `/status`) command, which queries each
+of the caller's own peers. `protocol_name` is validated against the same safe-name pattern as
+deploy/remove, and the call is bounded by `max_concurrency` like the other looking-glass reads.
 
 ## Concurrency
 

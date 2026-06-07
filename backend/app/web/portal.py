@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.auth.session import current_user
 from app.db.models import Agent, PeerRequest
 from app.db.session import get_db
-from app.peer.config import render_user_config
+from app.peer.config import peering_info, render_user_config
 from app.peer.service import create_peer
 from app.peer.validation import asn_link_local_address
 from app.web.deps import query_enabled_agents, render, settings
@@ -44,7 +44,9 @@ def portal(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
         "portal.html",
         {
             "agents": agents,
-            "peers": peers,
+            # Pair each peer with the "our side" details so the template can show them inline once
+            # the peer is deployed. 把每個 peer 與「我方」參數配對,部署成功後於頁面就地顯示。
+            "peers": [{"peer": peer, "peering": peering_info(peer, peer.agent)} for peer in peers],
             "default_local_link_address": default_local_link_address,
             "default_peer_link_address": default_peer_link_address,
         },

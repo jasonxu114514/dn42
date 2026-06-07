@@ -90,8 +90,7 @@ class DeletePeer(StatesGroup):
 HELP_TEXT = (
     "dn42 autopeer bot\n\n"
     "/login - link your dn42 ASN (Kioubit)\n"
-    "/peer - list your peers\n"
-    "/status - detailed BGP status of your peers\n"
+    "/peer (or /status) - your peers: state, our-side params, and live BGP status\n"
     "/create - create a peer (guided)\n"
     "/edit - edit one of your peers (guided)\n"
     "/delete - delete one of your peers (guided)\n"
@@ -238,12 +237,36 @@ async def load_user_peers(message: Message) -> list[dict] | None:
     return data.get("peers", [])
 
 
+def peering_info_lines(info: dict) -> str:
+    """The three "our side" parameters a peer copies into their own WireGuard/BGP config.
+
+    我方端點／公鑰／隧道內位址,供對端填入自己的 WireGuard 與 BGP 設定。
+    """
+    return (
+        f"our endpoint:  {info.get('endpoint', '')}\n"
+        f"our pubkey:    {info.get('public_key', '')}\n"
+        f"our tunnel IP: {info.get('tunnel_ip', '')}  (your BGP neighbor)"
+    )
+
+
+def peering_info_text(info: dict) -> str:
+    """The our-side block shown after a successful deploy: a caption plus the parameters."""
+    return "Configure your side with our details:\n" + peering_info_lines(info)
+
+
 async def send_peer_result(message: Message, action: str, result: dict) -> None:
+    deploy_status = result.get("deploy_status")
     await message.answer(
         f"{action} peer #{result.get('id')} on {result.get('agent')} "
-        f"(AS{result.get('asn')}) — deploy: {result.get('deploy_status')}",
+        f"(AS{result.get('asn')}) — deploy: {deploy_status}",
         reply_markup=ReplyKeyboardRemove(),
     )
+    # On success show the actionable "our side" parameters; otherwise show the deploy output so the
+    # failure reason is visible. 成功時顯示可操作的「我方」參數,失敗時顯示部署輸出以呈現原因。
+    if deploy_status == "deployed" and result.get("peering"):
+        block = format_block(peering_info_text(result["peering"]))
+        await message.answer(block, parse_mode="Markdown")
+        return
     output = str(result.get("deploy_output", "")).strip()
     if output:
         await message.answer(format_block(output, 1500), parse_mode="Markdown")
@@ -341,38 +364,36 @@ async def web_app_data(message: Message) -> None:
 # --- Peer list & status --------------------------------------------------------------------
 
 
-@dp.message(Command("peer"), default_state)
-async def peer_cmd(message: Message) -> None:
-    peers = await load_user_peers(message)
-    if peers is None:
-        return
-    if not peers:
-        await message.answer("You have no peers yet. Use /create to add one.")
-        return
-    await message.answer("Your peers:\n" + peer_list_text(peers))
+@dp.message(Command("peer", "status"), default_state)
+async def peers_cmd(message: Message) -> None:
+    """Unified peer view (merges /peer and /status): one block per peer with its state, the
+    our-side params to hand the other operator, and its live BGP status.
 
-
-@dp.message(Command("status"), default_state)
-async def status_cmd(message: Message) -> None:
+    合併 /peer 與 /status:每個對等一個區塊,含狀態、提供對端的我方參數與即時 BGP 狀態。
+    """
     result = await call_backend(
         message,
         backend.post("/api/telegram/status", {"telegram_user_id": str(message.from_user.id)}),
-        error_prefix="Status lookup failed",
+        error_prefix="Peer lookup failed",
+        not_found_message=NOT_LINKED_MSG,
     )
     if result is None:
         return
 
     peers = result.get("peers", [])
     if not peers:
-        await message.answer(f"AS{result.get('asn')} has no peers yet.")
+        await message.answer("You have no peers yet. Use /create to add one.")
         return
     blocks = []
     for peer in peers:
-        header = (
-            f"=== #{peer['id']} {peer['agent']} (AS{peer['asn']}) [{peer['deploy_status']}] ==="
-        )
+        label = " · ".join(filter(None, (peer.get("status"), peer.get("deploy_status"))))
+        lines = [f"=== #{peer['id']} {peer['agent']} (AS{peer['asn']}) [{label}] ==="]
+        if peer.get("endpoint"):
+            lines.append(f"your endpoint: {peer['endpoint']}")
+        if peer.get("peering"):
+            lines.append(peering_info_lines(peer["peering"]))
         body = str(peer.get("detail", "")).strip() or "(no detail)"
-        blocks.append(f"{header}\n{body}")
+        blocks.append("\n".join(lines) + f"\n\n{body}")
     for chunk in chunk_blocks(blocks):
         await message.answer(f"```\n{chunk}\n```", parse_mode="Markdown")
 

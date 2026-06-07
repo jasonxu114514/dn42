@@ -432,6 +432,102 @@ td select {
   vertical-align: bottom;
 }
 
+.agent-health {
+  min-width: 120px;
+}
+
+.online-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.online-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 3px currentColor;
+  opacity: 0.78;
+}
+
+.online-state.is-online {
+  color: var(--ok);
+}
+
+.online-state.is-offline {
+  color: var(--bad);
+}
+
+.system-summary {
+  display: inline-block;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.agent-system {
+  min-width: 280px;
+}
+
+.resource-metrics {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.resource-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.resource-metric span {
+  color: var(--muted);
+  font-family: var(--sans);
+  font-weight: 700;
+}
+
+.agent-status-details {
+  margin-top: 6px;
+}
+
+.agent-status-details summary {
+  width: fit-content;
+}
+
+.status-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 4px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.agent-status-output {
+  max-height: 260px;
+  min-width: 420px;
+  min-height: 44px;
+  padding: 12px;
+  font-size: 0.78rem;
+}
+
 /* ---------- forms ---------- */
 
 .form-grid {

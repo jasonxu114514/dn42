@@ -1,39 +1,104 @@
 # Agent API
 
-The agent is the router-side HTTP service used by the backend. It has two jobs:
+The agent is the router-side service used by the backend over an agent-initiated WSS connection. It
+has two jobs:
 
 - run looking-glass and peer-status commands with fixed argv;
 - deploy or remove generated WireGuard and BIRD peer config.
 
-The agent does not perform ASN authentication. It trusts the backend that calls it, so it should be
-reachable only by the backend or a trusted management network.
+The agent does not perform ASN authentication. It trusts the authenticated backend connection, so
+keep the token private.
 
 ## Common Contract
 
 ### Authentication
 
-If `token` is set in `config.json`, every route requires:
+Every agent connection should use:
 
 ```http
 Authorization: Bearer <token>
 ```
 
-The token is compared in constant time. If `token` is empty, agent auth is disabled.
+The token is checked by the backend in constant time against the token stored on the agent record.
 
-### JSON bodies
+### WSS transport
 
-POST routes accept one JSON object and reject:
+For normal backend communication, the agent connects to:
 
-- non-POST methods;
-- unsupported `Content-Type` values when a content type is sent;
+```text
+wss://<backend>/api/agents/ws?name=<agent-name>
+Authorization: Bearer <token>
+```
+
+If `backend_wss_url` is configured as a bare backend `http(s)` URL, the agent converts it to
+`ws(s)` and uses `/api/agents/ws`. The `name` value must match the agent record in Admin > Agents.
+
+After connecting, the agent sends:
+
+```json
+{
+  "type": "hello",
+  "public_key": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx=",
+  "system": {
+    "hostname": "router1",
+    "os": "linux",
+    "arch": "amd64",
+    "uptime_seconds": 123456,
+    "load_1": 0.12,
+    "load_5": 0.08,
+    "load_15": 0.05,
+    "goroutines": 8,
+    "wireguard": {
+      "ok": true,
+      "output": "wg show output for all interfaces"
+    },
+    "bird": {
+      "ok": true,
+      "output": "birdc show status + birdc show protocols all output"
+    }
+  }
+}
+```
+
+The same shape is sent periodically as `type: "heartbeat"`. The backend uses the active WSS
+connection for online/offline state and stores the last heartbeat as system status. WireGuard status
+comes from `wg show`; BIRD status combines `birdc show status` and `birdc show protocols all`.
+
+Backend requests use a request/response envelope:
+
+```json
+{
+  "type": "request",
+  "id": "opaque-request-id",
+  "command": "peers.status",
+  "payload": {"protocol_name": "DN42_0090"}
+}
+```
+
+The agent replies:
+
+```json
+{
+  "type": "response",
+  "id": "opaque-request-id",
+  "result": {"ok": true, "output": "..."}
+}
+```
+
+Errors that are not command results are returned as `{"type":"response","id":"...","error":"..."}`.
+Command results keep the JSON shapes described below.
+
+### JSON payloads
+
+Command payloads accept one JSON object and reject:
+
 - malformed JSON;
 - unknown JSON fields;
 - trailing data after the first JSON object;
-- bodies larger than the route limit.
 
 ### Response shapes
 
-Most command routes return:
+Most commands return:
 
 ```json
 {
@@ -59,24 +124,24 @@ Deploy and remove routes return:
 `ok` means the requested operation completed successfully. `applied` means the agent already wrote
 or removed files before a later step failed; callers should surface `output` to the operator.
 
-## Endpoints
+## Commands
 
-| Method | Path | Purpose | Concurrency-capped |
-| --- | --- | --- | --- |
-| `GET` | `/v1/status` | `birdc show protocols` | yes |
-| `GET` | `/v1/pubkey` | Return this PoP's WireGuard public key | no |
-| `POST` | `/v1/lg/ping` | Run ping against a target | yes |
-| `POST` | `/v1/lg/trace` | Run traceroute against a target | yes |
-| `POST` | `/v1/lg/mtr` | Run mtr report mode against a target | yes |
-| `POST` | `/v1/lg/route` | Run `birdc show route for <target>` | yes |
-| `POST` | `/v1/peers/deploy` | Write and apply one peer's WireGuard/BIRD config | no |
-| `POST` | `/v1/peers/remove` | Tear down and delete one peer's config | no |
-| `POST` | `/v1/peers/status` | Return BIRD and WireGuard status for one peer | yes |
+| Command | Purpose | Concurrency-capped |
+| --- | --- | --- |
+| `status` | `birdc show protocols` | yes |
+| `pubkey` | Return this PoP's WireGuard public key | no |
+| `lg.ping` | Run ping against a target | yes |
+| `lg.trace` | Run traceroute against a target | yes |
+| `lg.mtr` | Run mtr report mode against a target | yes |
+| `lg.route` | Run `birdc show route for <target>` | yes |
+| `peers.deploy` | Write and apply one peer's WireGuard/BIRD config | no |
+| `peers.remove` | Tear down and delete one peer's config | no |
+| `peers.status` | Return BIRD and WireGuard status for one peer | yes |
 
-Concurrency-capped routes share the `max_concurrency` semaphore. When the semaphore is full, the
-agent returns `429` instead of queueing work.
+Concurrency-capped commands share the `max_concurrency` semaphore. When the semaphore is full, the
+agent returns `{"ok": false, "output": "agent is busy, try again shortly"}` instead of queueing work.
 
-## `GET /v1/status`
+## `status`
 
 Runs:
 
@@ -95,7 +160,7 @@ Example response:
 
 This is used by the public looking glass `status` query.
 
-## `GET /v1/pubkey`
+## `pubkey`
 
 Returns the agent's configured `wireguard_public_key`.
 
@@ -108,9 +173,9 @@ Returns the agent's configured `wireguard_public_key`.
 The agent validates this key during startup and refuses to start if it is missing or malformed. The
 backend stores it on the agent record and includes it in peer-facing generated config.
 
-## Looking-Glass Routes
+## Looking-Glass Commands
 
-All looking-glass routes take:
+All looking-glass commands take:
 
 ```json
 {
@@ -121,7 +186,7 @@ All looking-glass routes take:
 `target` validation rejects control characters, whitespace, shell metacharacters, a leading `-`, and
 values longer than 255 characters.
 
-### `POST /v1/lg/ping`
+### `lg.ping`
 
 Accepts any IPv4/IPv6 address or a DNS hostname. Hostnames are syntax-checked and resolved by the
 agent-side `ping` command.
@@ -132,7 +197,7 @@ Runs:
 ping -c 4 -W 3 <target>
 ```
 
-### `POST /v1/lg/trace`
+### `lg.trace`
 
 Accepts the same target shape as ping. For IPv6 literal targets, the agent adds `-6`.
 
@@ -142,7 +207,7 @@ Runs:
 traceroute -n -q 1 -w 2 -m 20 [-6] <target>
 ```
 
-### `POST /v1/lg/mtr`
+### `lg.mtr`
 
 Accepts the same target shape as trace. The command runs in non-interactive report mode. For IPv6
 literal targets, the agent adds `-6`.
@@ -153,7 +218,7 @@ Runs:
 mtr --report --report-cycles 4 --no-dns --report-wide [-6] <target>
 ```
 
-### `POST /v1/lg/route`
+### `lg.route`
 
 Accepts an IPv4/IPv6 address or CIDR prefix. Hostnames are not accepted because BIRD does not
 resolve names for this query.
@@ -167,7 +232,7 @@ birdc show route for <target>
 The `for` keyword asks BIRD for the route actually used to reach the target, rather than only an
 exact-prefix match.
 
-## `POST /v1/peers/status`
+## `peers.status`
 
 Request:
 
@@ -203,7 +268,7 @@ Response:
 `ok` reflects the BIRD command. The `wireguard` field is still returned even when the interface is
 down, because `wg show` output such as "No such device" is useful status.
 
-## `POST /v1/peers/deploy`
+## `peers.deploy`
 
 Request:
 
@@ -266,7 +331,7 @@ Example success:
 If file writes succeed but `wg-quick up` or the reload command fails, `applied` is `true` and `ok`
 is `false`.
 
-## `POST /v1/peers/remove`
+## `peers.remove`
 
 Request:
 
@@ -314,9 +379,7 @@ agent returns `ok: false` and appends `command timed out` to the command output.
 
 ## Backend Relationship
 
-Normal operators do not call this API manually. The backend calls it when users create, edit,
-redeploy, disable, or delete peers. The backend also calls:
-
-- `GET /v1/pubkey` when registering or refreshing an agent;
-- `POST /v1/peers/status` when showing live peer status;
-- looking-glass routes for public Web UI and Telegram queries.
+Normal operators do not call this protocol manually. The backend sends WSS commands over the active
+agent connection when users create, edit, redeploy, disable, or delete peers. It also sends WSS
+commands for public looking-glass queries, Telegram looking-glass queries, public-key refresh, and
+live peer status.

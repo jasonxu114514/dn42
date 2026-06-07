@@ -1,6 +1,7 @@
 {
-  "listen": "127.0.0.1:8080",
+  "name": "frankfurt",
   "token": "change-me",
+  "backend_wss_url": "wss://autopeer.example.com/api/agents/ws",
   "max_concurrency": 4,
   "command_timeout_seconds": 12,
   "birdc_path": "/usr/sbin/birdc",

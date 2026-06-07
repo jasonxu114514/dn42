@@ -301,6 +301,19 @@ func (r Runner) Status() Result {
 	return Result{OK: false, Output: fmt.Sprintf("bird status failed:\n%s", bird.Output)}
 }
 
+func (r Runner) WireGuardStatus() Result {
+	return r.run(r.WgPath, "show")
+}
+
+func (r Runner) BirdStatus() Result {
+	status := r.run(r.BirdcPath, "show", "status")
+	protocols := r.run(r.BirdcPath, "show", "protocols", "all")
+	output := strings.TrimSpace(
+		"birdc show status:\n" + status.Output + "\n\nbirdc show protocols all:\n" + protocols.Output,
+	)
+	return Result{OK: status.OK && protocols.OK, Output: output}
+}
+
 // PeerStatus returns the detailed BIRD protocol state for a single peer, used by the bot's
 // per-peer /status command. protocolName is validated and passed as fixed argv, never a shell.
 func (r Runner) PeerStatus(protocolName string) Result {

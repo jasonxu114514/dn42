@@ -50,7 +50,7 @@ Browser                 Telegram bot
 | - renders WireGuard and BIRD peer config        |
 +------------------------------------------------+
                          |
-                         | Bearer-token HTTP
+                         | Agent-initiated WSS
                          v
 +------------------------------------------------+
 | Agent on each router / PoP                      |
@@ -61,7 +61,8 @@ Browser                 Telegram bot
 ```
 
 The backend can run on the same host as the bot. Agents usually run on routers, one agent per PoP.
-Each agent has its own URL and bearer token stored in the backend admin panel.
+Each agent keeps a bearer-token WSS connection to the backend; the URL stored in the admin panel is
+the public endpoint host used for generated WireGuard configs.
 
 ## How Peering Works
 
@@ -75,7 +76,7 @@ Each agent has its own URL and bearer token stored in the backend admin panel.
    - in the Web UI, optionally overrides the link-local BGP addresses.
 3. The backend validates the values, enforces one peer per ASN per PoP, stores the peer as approved,
    and renders the WireGuard and BIRD config.
-4. The backend calls the agent `POST /v1/peers/deploy`.
+4. The backend sends a `peers.deploy` command over the agent's WSS connection.
 5. The agent writes the config files, runs `wg-quick down` and `wg-quick up`, then runs the optional
    BIRD reload command.
 6. After deployment, the Web UI and bot show the peer the operator-side values:
@@ -96,7 +97,7 @@ BIRD snippets.
 | Peer link-local address | `fe80::<asn-suffix>` | `fe80::90` |
 | WireGuard MTU | User-editable, default `1420`, range `1280-9000` | `1420` |
 
-The agent host part of the endpoint is taken from the agent URL registered in the admin panel. The
+The host part of our endpoint is taken from the endpoint URL registered in the admin panel. The
 backend adds the ASN-derived WireGuard listen port.
 
 Generated WireGuard configs include the MTU in `[Interface]`:
@@ -168,9 +169,10 @@ cp config.example.json config.json
 ./agent -config ./config.json
 ```
 
-The backend starts with no agents. Register each PoP in **Admin > Agents**, then copy the generated
-agent token into the matching router's `config.json`. The backend fetches the agent's configured
-`wireguard_public_key` from `GET /v1/pubkey` and shows it to peers.
+The backend starts with no agents. Register each PoP in **Admin > Agents**, then copy the PoP name,
+generated token, and backend WSS URL into the matching router's `config.json`. Once connected, the
+agent sends heartbeat/system status, all-server WireGuard/BIRD status, and its configured
+`wireguard_public_key`, which the backend caches and shows to peers.
 
 ## Configuration
 
@@ -205,8 +207,9 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `listen` | `:8080` | Agent listen address. |
-| `token` | empty | Bearer token required on every route. Empty disables auth. |
+| `name` | empty | PoP name matching the backend agent record; required for WSS. |
+| `token` | empty | Bearer token used for the WSS connection. |
+| `backend_wss_url` | required | Backend websocket URL, usually `wss://example.com/api/agents/ws`. `http(s)` base URLs are accepted and converted to `ws(s)`. |
 | `max_concurrency` | `4` | Concurrent looking-glass/status commands. `0` disables the cap. |
 | `command_timeout_seconds` | `12` | Timeout for each external command. |
 | `birdc_path` | `birdc` | Path to `birdc`. |
@@ -220,7 +223,7 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 | `bird_peer_group` | `bird` | Group assigned to BIRD snippets so an unprivileged BIRD daemon can read them. `""` disables chown. |
 | `deploy_reload_cmd` | empty | Fixed-argv command run after deploy/remove, such as `birdc c`. |
 | `wireguard_private_key` | empty | Router private key substituted for `{{WIREGUARD_PRIVATE_KEY}}`. |
-| `wireguard_public_key` | required | Router public key served to the backend and peers. |
+| `wireguard_public_key` | required | Router public key reported to the backend and peers. |
 
 Keep the agent config root-owned and mode `0600`; it contains the agent token and WireGuard private
 key.
@@ -306,7 +309,7 @@ are documented in [docs/auth-flow.md](docs/auth-flow.md).
 - Backend sessions are signed cookies.
 - The backend rejects placeholder secrets unless insecure defaults are explicitly allowed.
 - The bot-only API requires `X-Backend-Secret`.
-- Agent routes require `Authorization: Bearer <token>` when `token` is configured.
+- Agent WSS connections require `Authorization: Bearer <token>`.
 - Agent and bot secrets are compared in constant time.
 - User-supplied router config fields are validated before rendering.
 - Agent commands use fixed argv, never a shell.
@@ -319,8 +322,9 @@ are documented in [docs/auth-flow.md](docs/auth-flow.md).
 | --- | --- |
 | Backend refuses to start with insecure defaults | Set strong `SESSION_SECRET` and `TELEGRAM_BACKEND_SECRET`, or use `--allow-http` for local testing. |
 | Telegram Mini App login does not work | `DOMAIN` must be a public HTTPS URL. |
+| Agent stays offline | Check `name`, `backend_wss_url`, TLS reachability, and that the token matches **Admin > Agents**. |
 | Agent returns `unauthorized` | Backend agent token and agent `config.json` token do not match. |
-| Peer config shows `<our-wireguard-public-key>` | Refresh the agent pubkey in **Admin > Agents** and check `wireguard_public_key`. |
+| Peer config shows `<our-wireguard-public-key>` | Connect the agent or refresh the pubkey in **Admin > Agents**, then check `wireguard_public_key`. |
 | Deploy fails with missing private key | Set `wireguard_private_key` in the agent config. |
 | Deploy fails with BIRD permission errors | Set `bird_peer_group` to the group used by the BIRD daemon, often `bird`. |
 | BGP session stays down | Check link-local addresses, MTU, allowed routes, BIRD template, and `wg show <interface>`. |

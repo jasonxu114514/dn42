@@ -15,7 +15,6 @@ import (
 )
 
 const (
-	defaultListen         = ":8080"
 	defaultMaxConcurrency = 4
 	defaultTimeoutSeconds = 12
 	defaultBirdcPath      = "birdc"
@@ -34,8 +33,11 @@ const (
 // Config 為 agent 的完整執行設定。欄位預設值於解碼後由 applyDefaults 套用,因此最小設定檔只需給定
 // wireguard_public_key(必填),通常再加上 token 即可。
 type Config struct {
-	Listen string `json:"listen"`
-	Token  string `json:"token"`
+	Name  string `json:"name"`
+	Token string `json:"token"`
+	// BackendWSURL is the backend websocket endpoint this agent connects to, usually
+	// wss://<backend>/api/agents/ws. It is required; the agent no longer starts a listener.
+	BackendWSURL string `json:"backend_wss_url"`
 	// MaxConcurrency bounds concurrent looking-glass commands. A pointer distinguishes "unset"
 	// (nil -> default 4) from an explicit 0, which disables the cap entirely; a negative value
 	// falls back to the default, mirroring the previous env parsing.
@@ -51,10 +53,10 @@ type Config struct {
 	BirdcPath      string `json:"birdc_path"`
 	PingPath       string `json:"ping_path"`
 	TraceroutePath string `json:"traceroute_path"`
-	// MtrPath is the `mtr` binary used by the /v1/lg/mtr looking-glass query; WgPath is the `wg`
+	// MtrPath is the `mtr` binary used by the mtr looking-glass query; WgPath is the `wg`
 	// binary (distinct from wg_quick_path) used to read a single peer's tunnel status via
 	// `wg show <interface>`. Both default to a bare name resolved on PATH.
-	// MtrPath 為 /v1/lg/mtr looking-glass 查詢所用的 `mtr` 執行檔;WgPath 為 `wg` 執行檔(與
+	// MtrPath 為 mtr looking-glass 查詢所用的 `mtr` 執行檔;WgPath 為 `wg` 執行檔(與
 	// wg_quick_path 不同),用於以 `wg show <介面>` 讀取單一對等的隧道狀態。兩者預設為由 PATH 解析的裸名。
 	MtrPath     string `json:"mtr_path"`
 	WgPath      string `json:"wg_path"`
@@ -106,8 +108,9 @@ func Load(path string) (Config, error) {
 // applyDefaults 修剪字串欄位並以預設值填補空值。其修剪行為與先前以環境變數為基礎的載入器一致
 // (token、金鑰、reload 指令、工具路徑)。
 func (c *Config) applyDefaults() {
-	c.Listen = orDefault(c.Listen, defaultListen)
+	c.Name = strings.TrimSpace(c.Name)
 	c.Token = strings.TrimSpace(c.Token)
+	c.BackendWSURL = strings.TrimSpace(c.BackendWSURL)
 	if c.CommandTimeoutSeconds <= 0 {
 		c.CommandTimeoutSeconds = defaultTimeoutSeconds
 	}

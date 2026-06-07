@@ -1,7 +1,6 @@
 from typing import Any
 
-import httpx
-
+from app.agent_ws import AgentRequestError, request_agent_sync
 from app.config import Settings
 from app.db.models import Agent, PeerRequest, utcnow
 from app.peer.config import (
@@ -48,51 +47,28 @@ def deploy_peer(
     if not agent.enabled:
         raise PeerDeployError("Agent is disabled")
     payload = build_deploy_payload(peer, agent, settings)
-    headers = {"Authorization": f"Bearer {agent.token}"} if agent.token else {}
-    response = httpx.post(
-        f"{agent.url.rstrip('/')}/v1/peers/deploy",
-        headers=headers,
-        json=payload,
-        timeout=timeout,
-    )
-    response.raise_for_status()
-    return response.json()
+    return request_agent_sync(agent, "peers.deploy", payload, timeout)
 
 
 def remove_peer(peer: PeerRequest, agent: Agent, timeout: float = 20.0) -> dict[str, Any]:
     """Ask the agent to tear down a peer: bring the tunnel down and delete its config files."""
-    headers = {"Authorization": f"Bearer {agent.token}"} if agent.token else {}
     payload = {
         "request_id": peer.id,
         "protocol_name": peer_protocol_name(peer, agent),
     }
-    response = httpx.post(
-        f"{agent.url.rstrip('/')}/v1/peers/remove",
-        headers=headers,
-        json=payload,
-        timeout=timeout,
-    )
-    response.raise_for_status()
-    return response.json()
+    return request_agent_sync(agent, "peers.remove", payload, timeout)
 
 
 def fetch_agent_public_key(agent: Agent, timeout: float = 10.0) -> str | None:
-    """Fetch and validate the agent's own WireGuard public key from its ``GET /v1/pubkey`` endpoint.
+    """Fetch and validate the agent's own WireGuard public key through its WSS ``pubkey`` command.
 
     Returns the normalized 44-char key, or ``None`` when the agent is unreachable/errors or returns
     a value that is not a well-formed WireGuard key. Callers treat ``None`` as "leave the cached key
     unchanged" so a transient outage never wipes a previously fetched key.
     """
-    headers = {"Authorization": f"Bearer {agent.token}"} if agent.token else {}
     try:
-        response = httpx.get(
-            f"{agent.url.rstrip('/')}/v1/pubkey",
-            headers=headers,
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        data = response.json()
-    except (httpx.HTTPError, ValueError):
+        data = request_agent_sync(agent, "pubkey", {}, timeout)
+    except (AgentRequestError, RuntimeError, ValueError):
         return None
     key = data.get("public_key") if isinstance(data, dict) else None
     if not isinstance(key, str):

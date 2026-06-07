@@ -1,15 +1,15 @@
 {% extends "admin/layout.html" %}
-{% from "macros.html" import page_header, copy_button %}
+{% from "macros.html" import page_header, copy_button, badge %}
 {% block title %}Agents · {{ settings.app_name }}{% endblock %}
 {% block admin %}
-{{ page_header("Agents (PoPs)", "Each PoP runs an agent that deploys WireGuard + BIRD configs as root.") }}
+{{ page_header("Agents (PoPs)", "Agents connect back over WSS and deploy WireGuard + BIRD configs as root.") }}
 
 <div class="card">
   <h2>Add a PoP</h2>
   <form method="post" action="/admin/agents" class="form-grid">
     <label class="field">Name<input name="name" placeholder="frankfurt" required></label>
     <label class="field">Location<input name="location" placeholder="DE"></label>
-    <label class="field">Agent API URL<input name="url" placeholder="http://127.0.0.1:8080" required></label>
+    <label class="field">Endpoint URL<input name="url" placeholder="https://pop.example.net" required></label>
     <label class="checkbox-label"><input type="checkbox" name="enabled" checked> Enabled</label>
     <button type="submit" class="btn-primary">Create agent</button>
   </form>
@@ -20,22 +20,81 @@
   {% if agents %}
   {% for agent in agents %}
     <form id="agent-update-{{ agent.id }}" method="post" action="/admin/agents/{{ agent.id }}/update"></form>
-    <form id="agent-token-{{ agent.id }}" method="post" action="/admin/agents/{{ agent.id }}/reset-token" data-confirm="Issue a new API token for {{ agent.name }}? The agent must be reconfigured with the new token."></form>
+    <form id="agent-token-{{ agent.id }}" method="post"
+          action="/admin/agents/{{ agent.id }}/reset-token"
+          data-confirm="Issue a new API token for {{ agent.name }}? The agent must be reconfigured with the new token.">
+    </form>
     <form id="agent-refresh-{{ agent.id }}" method="post" action="/admin/agents/{{ agent.id }}/refresh-pubkey"></form>
-    <form id="agent-delete-{{ agent.id }}" method="post" action="/admin/agents/{{ agent.id }}/delete" data-confirm="Delete agent {{ agent.name }}? This cannot be undone."></form>
+    <form id="agent-delete-{{ agent.id }}" method="post"
+          action="/admin/agents/{{ agent.id }}/delete"
+          data-confirm="Delete agent {{ agent.name }}? This cannot be undone."></form>
   {% endfor %}
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Name</th><th>Location</th><th>Agent API URL</th><th>Token</th><th>WG pubkey</th><th>On</th><th>Actions</th></tr></thead>
+      <thead>
+        <tr>
+          <th>Name</th><th>Location</th><th>Endpoint URL</th><th>WSS</th><th>System</th>
+          <th>Token</th><th>WG pubkey</th><th>On</th><th>Actions</th>
+        </tr>
+      </thead>
       <tbody>
         {% for agent in agents %}
+        {% set runtime = agent_runtime[agent.id] %}
         <tr>
           <td><input form="agent-update-{{ agent.id }}" name="name" value="{{ agent.name }}" required></td>
           <td><input form="agent-update-{{ agent.id }}" name="location" value="{{ agent.location }}"></td>
           <td><input form="agent-update-{{ agent.id }}" name="url" value="{{ agent.url }}" required></td>
-          <td class="nowrap"><span class="mono truncate" title="{{ agent.token }}">{{ agent.token }}</span> {{ copy_button(agent.token) }}</td>
-          <td class="nowrap"><span class="mono truncate" title="{{ agent.wg_public_key }}">{{ agent.wg_public_key or "—" }}</span>{% if agent.wg_public_key %} {{ copy_button(agent.wg_public_key) }}{% endif %}</td>
-          <td><label class="checkbox-label"><input form="agent-update-{{ agent.id }}" type="checkbox" name="enabled" {% if agent.enabled %}checked{% endif %}></label></td>
+          <td class="agent-health">
+            <span class="online-state {{ 'is-online' if runtime.online else 'is-offline' }}">
+              <span class="online-dot" aria-hidden="true"></span>
+              {{ "online" if runtime.online else "offline" }}
+            </span>
+            {% if runtime.last_seen_at %}<div class="faint">seen {{ runtime.last_seen_at }}</div>{% endif %}
+          </td>
+          <td class="agent-system">
+            <span class="system-summary" title="{{ runtime.system_summary }}">{{ runtime.system_summary }}</span>
+            {% if runtime.resource_metrics %}
+              <div class="resource-metrics">
+                {% for metric in runtime.resource_metrics %}
+                  <span class="resource-metric"><span>{{ metric.label }}</span>{{ metric.value }}</span>
+                {% endfor %}
+              </div>
+            {% endif %}
+            {% if runtime.system.wireguard or runtime.system.bird %}
+              <details class="agent-status-details">
+                <summary>WG / BIRD</summary>
+                {% if runtime.system.wireguard %}
+                  <div class="status-label">
+                    WireGuard
+                    {{ badge("ok", "ok") if runtime.system.wireguard.ok else badge("fail", "bad") }}
+                  </div>
+                  <pre class="terminal agent-status-output">{{ runtime.system.wireguard.output or "(no output)" }}</pre>
+                {% endif %}
+                {% if runtime.system.bird %}
+                  <div class="status-label">
+                    BIRD {{ badge("ok", "ok") if runtime.system.bird.ok else badge("fail", "bad") }}
+                  </div>
+                  <pre class="terminal agent-status-output">{{ runtime.system.bird.output or "(no output)" }}</pre>
+                {% endif %}
+              </details>
+            {% endif %}
+          </td>
+          <td class="nowrap">
+            <span class="mono truncate" title="{{ agent.token }}">{{ agent.token }}</span>
+            {{ copy_button(agent.token) }}
+          </td>
+          <td class="nowrap">
+            <span class="mono truncate" title="{{ agent.wg_public_key }}">
+              {{ agent.wg_public_key or "—" }}
+            </span>
+            {% if agent.wg_public_key %}{{ copy_button(agent.wg_public_key) }}{% endif %}
+          </td>
+          <td>
+            <label class="checkbox-label">
+              <input form="agent-update-{{ agent.id }}" type="checkbox" name="enabled"
+                     {% if agent.enabled %}checked{% endif %}>
+            </label>
+          </td>
           <td class="row-actions">
             <button form="agent-update-{{ agent.id }}" type="submit" class="btn-primary btn-sm">Save</button>
             <button form="agent-refresh-{{ agent.id }}" type="submit" class="btn-secondary btn-sm">Refresh key</button>

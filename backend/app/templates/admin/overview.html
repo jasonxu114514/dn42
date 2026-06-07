@@ -5,7 +5,7 @@
 {{ page_header("Overview", "Control plane: " ~ settings.base_url) }}
 
 <div class="stat-grid">
-  {{ stat_card("Agents (PoPs)", stats.agents_enabled, stats.agents_total ~ " total", "accent", "/admin/agents") }}
+  {{ stat_card("Agents online", stats.agents_online, stats.agents_enabled ~ " enabled / " ~ stats.agents_total ~ " total", "accent", "/admin/agents") }}
   {{ stat_card("Peers", stats.peers_total, stats.peers_deployed ~ " deployed", "ok", "/admin/peers") }}
   {{ stat_card("Failed deploys", stats.peers_failed, "need attention" if stats.peers_failed else "all healthy", "bad" if stats.peers_failed else "ok", "/admin/peers") }}
   {{ stat_card("Users", stats.users_total, stats.users_admin ~ " admin", "neutral", "/admin/users") }}

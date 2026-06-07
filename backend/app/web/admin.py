@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from app.agent_ws import agent_runtime_context
 from app.auth.service import unbind_telegram
 from app.db.models import ASNIdentity, Agent, LGQuery, PeerRequest, TelegramBinding, User
 from app.db.session import get_db
@@ -54,9 +55,13 @@ def admin_overview(
             query = query.filter(f)
         return query.scalar() or 0
 
+    agents_for_runtime = db.query(Agent).order_by(Agent.name).all()
+    runtime = agent_runtime_context(agents_for_runtime)
+    agents_online = sum(1 for item in runtime.values() if item["online"])
     stats = {
         "agents_total": count(Agent),
         "agents_enabled": count(Agent, Agent.enabled.is_(True)),
+        "agents_online": agents_online,
         "peers_total": count(PeerRequest),
         "peers_deployed": count(PeerRequest, PeerRequest.deploy_status == "deployed"),
         "peers_failed": count(PeerRequest, PeerRequest.deploy_status == "failed"),
@@ -107,7 +112,13 @@ def admin_agents(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     agents = db.query(Agent).order_by(Agent.name).all()
-    return render(request, "admin/agents.html", {"agents": agents}, user=user, active="admin")
+    return render(
+        request,
+        "admin/agents.html",
+        {"agents": agents, "agent_runtime": agent_runtime_context(agents)},
+        user=user,
+        active="admin",
+    )
 
 
 @router.get("/admin/peers", response_class=HTMLResponse)
@@ -225,9 +236,6 @@ def admin_create_agent(
         token=secrets.token_urlsafe(32),
         enabled=enabled == "on",
     )
-    # Best-effort fetch of this PoP's WireGuard public key. A PoP may be registered before its agent
-    # is online, so a failure just leaves the key empty (refresh it later from the admin panel).
-    agent.wg_public_key = fetch_agent_public_key(agent) or ""
     db.add(agent)
     db.commit()
     flash(request, f"Agent '{name}' created.", "success")
@@ -284,8 +292,9 @@ def admin_refresh_agent_pubkey(
     if key is None:
         flash(
             request,
-            "Could not fetch a WireGuard public key from the agent. Check the agent URL/token and "
-            "that wireguard_public_key is set in the agent's config, then retry.",
+            "Could not fetch a WireGuard public key from the agent. Check WSS connectivity, "
+            "agent name/token, and that wireguard_public_key is set in the agent's config, "
+            "then retry.",
             "error",
         )
         return RedirectResponse("/admin/agents", status_code=303)

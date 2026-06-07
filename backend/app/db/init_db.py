@@ -29,6 +29,14 @@ def _ensure_agent_columns() -> None:
             conn.execute(
                 text("ALTER TABLE agents ADD COLUMN wg_public_key VARCHAR(128) NOT NULL DEFAULT ''")
             )
+    if "last_seen_at" not in columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE agents ADD COLUMN last_seen_at DATETIME"))
+    if "system_status_json" not in columns:
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE agents ADD COLUMN system_status_json TEXT NOT NULL DEFAULT '{}'")
+            )
 
 
 def _ensure_peer_request_columns() -> None:

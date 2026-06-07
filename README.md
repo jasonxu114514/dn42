@@ -259,6 +259,7 @@ Commands:
 /trace        Run traceroute from a PoP
 /mtr          Run mtr from a PoP
 /route        Run a BIRD route lookup from a PoP
+/status       Run a BIRD status query from a PoP
 /cancel       Abort the current guided action
 ```
 

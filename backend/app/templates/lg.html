@@ -3,7 +3,7 @@
 {% block title %}Looking Glass · {{ settings.app_name }}{% endblock %}
 {% block content %}
 <div class="card">
-  {{ page_header("Looking Glass", "Run ping, traceroute, route, and BGP-status queries from any PoP.") }}
+  {{ page_header("Looking Glass", "Run ping, traceroute, mtr, route, and BGP-status queries from any PoP.") }}
   {% if agents %}
   <form id="lg-form" method="post" action="/lg" class="form-grid">
     <label class="field">Agent (PoP)
@@ -15,7 +15,7 @@
     </label>
     <label class="field">Query
       <select name="query_type">
-        {% for q in ["ping", "trace", "route", "status"] %}
+        {% for q in ["ping", "trace", "mtr", "route", "status"] %}
           <option value="{{ q }}" {% if last_query == q %}selected{% endif %}>{{ "traceroute" if q == "trace" else q }}</option>
         {% endfor %}
       </select>

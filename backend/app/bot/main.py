@@ -128,6 +128,7 @@ HELP_TEXT = (
     "/trace\n"
     "/mtr\n"
     "/route\n"
+    "/status\n"
     "/cancel - Cancel ALL?"
 )
 
@@ -148,6 +149,7 @@ BOT_COMMANDS = [
     BotCommand(command="trace", description="trace someone"),
     BotCommand(command="mtr", description="mtr someone"),
     BotCommand(command="route", description="show route on router"),
+    BotCommand(command="status", description="show BIRD status on a PoP"),
     BotCommand(command="cancel", description="cancel all"),
     BotCommand(command="help", description="show this help"),
 ]
@@ -577,16 +579,29 @@ def parse_lg_target(message: Message) -> str:
     return parts[1]
 
 
+def lg_caption(query_type: str, target: str) -> str:
+    """The ``<type> <target>`` heading shown above LG output, or just ``<type>`` when there is no
+    target (``status`` is router-wide and takes none).
+    LG 輸出上方的標題；``status`` 為整台路由器查詢、無目標，故僅顯示指令名稱。
+    """
+    return f"{query_type} {target}".rstrip()
+
+
 async def run_lg(message: Message, state: FSMContext, query_type: str) -> None:
     """Run the query on a random PoP immediately, then let the user switch PoPs via buttons.
 
     立即在隨機 PoP 上執行，並附按鈕讓使用者切換 PoP（結果就地以 edit 更新）。
     """
-    try:
-        target = parse_lg_target(message)
-    except ValueError as exc:
-        await message.answer(str(exc))
-        return
+    # `status` is router-wide and takes no target; every other query requires one.
+    # status 為整台路由器的查詢、不需目標；其餘查詢則必須帶目標。
+    if query_type == "status":
+        target = ""
+    else:
+        try:
+            target = parse_lg_target(message)
+        except ValueError as exc:
+            await message.answer(str(exc))
+            return
     data = await call_backend(
         message,
         backend.get("/api/telegram/agents"),
@@ -609,7 +624,7 @@ async def run_lg(message: Message, state: FSMContext, query_type: str) -> None:
     # 隨機挑一個 PoP 立即顯示輸出；使用者可再用按鈕切換。
     agent = random.choice(names)
     placeholder = await message.answer(
-        format_block(f"{query_type} {target} @ {agent}\n\nrunning…"),
+        format_block(f"{lg_caption(query_type, target)} @ {agent}\n\nrunning…"),
         parse_mode="Markdown",
         reply_markup=lg_agent_inline_keyboard(names, token, active=agent),
     )
@@ -655,7 +670,7 @@ async def render_lg(
         body = f"Looking glass failed: {detail_of(exc)}"
     except httpx.HTTPError as exc:
         body = f"Looking glass failed: {exc}"
-    text = format_block(f"{query_type} {target} @ {agent}\n\n{body}")
+    text = format_block(f"{lg_caption(query_type, target)} @ {agent}\n\n{body}")
     try:
         await message.edit_text(
             text,
@@ -722,6 +737,11 @@ async def mtr_cmd(message: Message, state: FSMContext) -> None:
 @dp.message(Command("route"), default_state)
 async def route_cmd(message: Message, state: FSMContext) -> None:
     await run_lg(message, state, "route")
+
+
+@dp.message(Command("status"), default_state)
+async def status_cmd(message: Message, state: FSMContext) -> None:
+    await run_lg(message, state, "status")
 
 
 # --- Guided peer management ----------------------------------------------------------------

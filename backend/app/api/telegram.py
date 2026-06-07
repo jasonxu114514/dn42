@@ -12,6 +12,7 @@ from app.auth.service import (
     consume_challenge,
     create_challenge,
     get_user_by_telegram,
+    unbind_telegram,
     upsert_user_from_kioubit,
 )
 from app.config import get_settings
@@ -86,6 +87,12 @@ class PeerStatusRequest(BaseModel):
     telegram_user_id: str = Field(pattern=r"^\d{1,20}$")
 
 
+class LogoutRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    telegram_user_id: str = Field(pattern=r"^\d{1,20}$")
+
+
 def require_bot_secret(x_backend_secret: str = Header("")) -> None:
     """Guard the bot-only API: the shared secret must match in constant time.
 
@@ -140,6 +147,21 @@ def telegram_verify(payload: VerifyRequest, db: Session = Depends(get_db)) -> di
         "effective_mnt": data.get("effective_mnt"),
         "authtype": data.get("authtype"),
     }
+
+
+@router.post("/logout", dependencies=[Depends(require_bot_secret)])
+def telegram_logout(payload: LogoutRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Unlink the caller's Telegram account from its dn42 ASN (the bot's /logout).
+
+    404 when the account is not linked, so the bot can show its standard "not linked" message.
+    The user's peers are kept (they reference the user, not the Telegram binding) and reappear on
+    a future /login. 未連結時回 404,使 bot 顯示其標準「未連結」訊息;對等保留,日後 /login 重新出現。
+    """
+    user = get_user_by_telegram(db, payload.telegram_user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Telegram account is not verified")
+    unbind_telegram(db, payload.telegram_user_id)
+    return {"ok": True, "asn": user.primary_asn}
 
 
 @router.get("/peer/{telegram_user_id}", dependencies=[Depends(require_bot_secret)])
@@ -295,12 +317,20 @@ async def telegram_status(
 
     client = AgentClient()
 
-    async def fetch(agent: Agent, protocol_name: str) -> str:
+    async def fetch(agent: Agent, protocol_name: str) -> dict[str, str]:
+        # One agent round-trip returns both the BIRD protocol detail (``output``) and the
+        # WireGuard tunnel status (``wireguard``); a dead agent degrades to a message without
+        # failing the batch.
+        # 單次 agent 往返同時回傳 BIRD protocol 細節(``output``)與 WireGuard 隧道狀態
+        # (``wireguard``);agent 失聯時退化為訊息,不使整批失敗。
         try:
             result = await client.peer_status(agent, protocol_name)
-            return str(result.get("output", result))
+            return {
+                "detail": str(result.get("output", result)),
+                "wg_detail": str(result.get("wireguard", "")),
+            }
         except Exception as exc:  # noqa: BLE001 - one dead agent must not fail the batch
-            return f"status unavailable: {exc}"
+            return {"detail": f"status unavailable: {exc}", "wg_detail": ""}
 
     # Read every ORM field (agent, peering, protocol name) up front so the Session is never touched
     # inside the gather below; the per-peer BGP queries then run concurrently over loaded data.
@@ -325,7 +355,5 @@ async def telegram_status(
     details = await asyncio.gather(*fetches)
     return {
         "asn": user.primary_asn,
-        "peers": [
-            {**snap, "detail": detail} for snap, detail in zip(snapshots, details, strict=True)
-        ],
+        "peers": [{**snap, **detail} for snap, detail in zip(snapshots, details, strict=True)],
     }

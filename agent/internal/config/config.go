@@ -21,6 +21,8 @@ const (
 	defaultBirdcPath      = "birdc"
 	defaultPingPath       = "ping"
 	defaultTraceroutePath = "traceroute"
+	defaultMtrPath        = "mtr"
+	defaultWgPath         = "wg"
 	defaultWgQuickPath    = "wg-quick"
 	defaultWireGuardDir   = "/etc/wireguard"
 	defaultBirdPeerDir    = "/etc/bird/peers"
@@ -49,7 +51,14 @@ type Config struct {
 	BirdcPath      string `json:"birdc_path"`
 	PingPath       string `json:"ping_path"`
 	TraceroutePath string `json:"traceroute_path"`
-	WgQuickPath    string `json:"wg_quick_path"`
+	// MtrPath is the `mtr` binary used by the /v1/lg/mtr looking-glass query; WgPath is the `wg`
+	// binary (distinct from wg_quick_path) used to read a single peer's tunnel status via
+	// `wg show <interface>`. Both default to a bare name resolved on PATH.
+	// MtrPath 為 /v1/lg/mtr looking-glass 查詢所用的 `mtr` 執行檔;WgPath 為 `wg` 執行檔(與
+	// wg_quick_path 不同),用於以 `wg show <介面>` 讀取單一對等的隧道狀態。兩者預設為由 PATH 解析的裸名。
+	MtrPath     string `json:"mtr_path"`
+	WgPath      string `json:"wg_path"`
+	WgQuickPath string `json:"wg_quick_path"`
 
 	WireGuardPeerDir string `json:"wireguard_peer_dir"`
 	BirdPeerDir      string `json:"bird_peer_dir"`
@@ -106,6 +115,8 @@ func (c *Config) applyDefaults() {
 	c.BirdcPath = orDefault(c.BirdcPath, defaultBirdcPath)
 	c.PingPath = orDefault(c.PingPath, defaultPingPath)
 	c.TraceroutePath = orDefault(c.TraceroutePath, defaultTraceroutePath)
+	c.MtrPath = orDefault(c.MtrPath, defaultMtrPath)
+	c.WgPath = orDefault(c.WgPath, defaultWgPath)
 	c.WgQuickPath = orDefault(c.WgQuickPath, defaultWgQuickPath)
 
 	c.WireGuardPeerDir = orDefault(c.WireGuardPeerDir, defaultWireGuardDir)

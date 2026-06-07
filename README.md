@@ -185,18 +185,20 @@ such as `1.1.1.0/24` both resolve to the route actually used.
 ## Telegram
 
 ```text
-/login                 link your dn42 ASN (Kioubit)
-/peer, /status         your peers: state, our-side params, and live BGP status
+/login                 Login your DN42 asn (Kioubit)
+/logout                Logout your DN42 asn (unlink; your peers are kept)
+/listpeers             your peers: our endpoint/pubkey/tunnel IP, WireGuard + BGP status
 /create                create a peer (guided wizard)
 /edit                  edit one of your peers (guided wizard)
 /delete                delete one of your peers (guided wizard)
 /ping  <ip-or-host>              random PoP, switch with the buttons
-/trace <ip-or-host>              random PoP, switch with the buttons (/mtr is an alias)
+/trace <ip-or-host>              random PoP, switch with the buttons
+/mtr   <ip-or-host>              random PoP, switch with the buttons
 /route <prefix-or-ip>            random PoP, switch with the buttons
 /cancel                abort the current guided action
 ```
 
-Each looking-glass command (`/ping`, `/trace`/`/mtr`, `/route`) takes only the target; the bot
+Each looking-glass command (`/ping`, `/trace`, `/mtr`, `/route`) takes only the target; the bot
 runs it on a random PoP immediately and shows the output with one inline button per PoP — tap a
 button to re-run on that PoP, editing the result in place. (The old `/ping <ip> <agent>` positional
 argument is gone.)

@@ -117,3 +117,24 @@ def get_user_by_telegram(db: Session, telegram_user_id: str) -> User | None:
     if binding is None:
         return None
     return db.query(User).filter(User.id == binding.user_id).one_or_none()
+
+
+def unbind_telegram(db: Session, telegram_user_id: str) -> bool:
+    """Remove the Telegram↔ASN link for ``telegram_user_id``; return whether one existed.
+
+    Only the ``TelegramBinding`` row is deleted — the ``User`` and its peers (which reference the
+    user, not the binding) are left intact, so a later ``/login`` re-links the same account and the
+    peers reappear. Used by the bot's ``/logout`` command.
+    僅刪除 ``TelegramBinding`` 列——``User`` 與其對等(參照 user 而非 binding)保持不變,故日後
+    ``/login`` 會重新連結同一帳號且對等重新出現。供 bot 的 ``/logout`` 指令使用。
+    """
+    binding = (
+        db.query(TelegramBinding)
+        .filter(TelegramBinding.telegram_user_id == telegram_user_id)
+        .one_or_none()
+    )
+    if binding is None:
+        return False
+    db.delete(binding)
+    db.commit()
+    return True

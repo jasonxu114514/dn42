@@ -6,6 +6,8 @@
   "birdc_path": "/usr/sbin/birdc",
   "ping_path": "ping",
   "traceroute_path": "traceroute",
+  "mtr_path": "mtr",
+  "wg_path": "wg",
   "wg_quick_path": "/usr/bin/wg-quick",
   "wireguard_peer_dir": "/etc/wireguard",
   "bird_peer_dir": "/etc/bird/peers",

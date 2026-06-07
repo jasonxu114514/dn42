@@ -17,7 +17,7 @@
 
 ## Telegram Login
 
-1. User sends `/verify`.
+1. User sends `/login`.
 2. Bot asks backend for a Telegram challenge.
 3. Bot sends a Telegram Web App button for `/telegram/auth?token=<challenge>`.
 4. Mini App renders the Kioubit button.

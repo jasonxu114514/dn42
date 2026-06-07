@@ -13,6 +13,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup, default_state
 from aiogram.types import (
+    BotCommand,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -89,16 +90,39 @@ class DeletePeer(StatesGroup):
 
 HELP_TEXT = (
     "dn42 autopeer bot\n\n"
-    "/login - link your dn42 ASN (Kioubit)\n"
-    "/peer (or /status) - your peers: state, our-side params, and live BGP status\n"
+    "/login - Login your dn42 ASN (Kioubit)\n"
+    "/logout - unlink your dn42 ASN\n"
+    "/listpeers - your peers: our endpoint/pubkey/tunnel IP, WireGuard + BGP status\n"
     "/create - create a peer (guided)\n"
     "/edit - edit one of your peers (guided)\n"
     "/delete - delete one of your peers (guided)\n"
     "/ping <ip-or-host> - random PoP; tap a button to switch\n"
     "/trace <ip-or-host> - random PoP; tap a button to switch\n"
+    "/mtr <ip-or-host> - random PoP; tap a button to switch\n"
     "/route <prefix-or-ip> - random PoP; tap a button to switch\n"
     "/cancel - abort the current guided action"
 )
+
+# The command menu shown by Telegram's "/" picker, registered via set_my_commands on startup.
+# Descriptions are the user-facing menu text. /start is intentionally omitted — it is the
+# implicit front door (its handler is kept) — while /help is listed so the full command
+# reference is reachable.
+# Telegram「/」選單(啟動時以 set_my_commands 註冊)。/start 刻意省略(它是隱含的入口,handler 仍保留),
+# /help 則列出以便取得完整指令說明。
+BOT_COMMANDS = [
+    BotCommand(command="login", description="Login your DN42 asn"),
+    BotCommand(command="logout", description="Logout your DN42 asn"),
+    BotCommand(command="listpeers", description="list your peers"),
+    BotCommand(command="create", description="create your peer"),
+    BotCommand(command="edit", description="edit a peer"),
+    BotCommand(command="delete", description="delete a peer"),
+    BotCommand(command="ping", description="ping someone"),
+    BotCommand(command="trace", description="trace someone"),
+    BotCommand(command="mtr", description="mtr someone"),
+    BotCommand(command="route", description="show route on router"),
+    BotCommand(command="cancel", description="cancel all"),
+    BotCommand(command="help", description="show this help"),
+]
 
 
 def user_payload(message: Message) -> dict[str, str]:
@@ -297,8 +321,8 @@ async def help_cmd(message: Message) -> None:
     await message.answer(HELP_TEXT)
 
 
-@dp.message(Command("verify", "login"), default_state)
-async def verify_cmd(message: Message) -> None:
+@dp.message(Command("login"), default_state)
+async def login_cmd(message: Message) -> None:
     data = await call_backend(
         message,
         backend.post("/api/telegram/challenge", user_payload(message)),
@@ -361,15 +385,31 @@ async def web_app_data(message: Message) -> None:
     )
 
 
+@dp.message(Command("logout"), default_state)
+async def logout_cmd(message: Message) -> None:
+    result = await call_backend(
+        message,
+        backend.post("/api/telegram/logout", {"telegram_user_id": str(message.from_user.id)}),
+        error_prefix="Logout failed",
+        not_found_message=NOT_LINKED_MSG,
+    )
+    if result is None:
+        return
+    await message.answer(
+        f"Logged out. Your Telegram account is no longer linked to AS{result.get('asn')}.\n"
+        "Your peers are kept — use /login to link again."
+    )
+
+
 # --- Peer list & status --------------------------------------------------------------------
 
 
-@dp.message(Command("peer", "status"), default_state)
+@dp.message(Command("listpeers"), default_state)
 async def peers_cmd(message: Message) -> None:
-    """Unified peer view (merges /peer and /status): one block per peer with its state, the
-    our-side params to hand the other operator, and its live BGP status.
+    """List the caller's peers: one block per peer with its state, the our-side params to hand the
+    other operator, and its live WireGuard + BGP status.
 
-    合併 /peer 與 /status:每個對等一個區塊,含狀態、提供對端的我方參數與即時 BGP 狀態。
+    每個對等一個區塊:狀態、提供對端的我方參數,以及即時 WireGuard 與 BGP 狀態。
     """
     result = await call_backend(
         message,
@@ -392,8 +432,9 @@ async def peers_cmd(message: Message) -> None:
             lines.append(f"your endpoint: {peer['endpoint']}")
         if peer.get("peering"):
             lines.append(peering_info_lines(peer["peering"]))
-        body = str(peer.get("detail", "")).strip() or "(no detail)"
-        blocks.append("\n".join(lines) + f"\n\n{body}")
+        wg = str(peer.get("wg_detail", "")).strip() or "(no WireGuard status)"
+        bird = str(peer.get("detail", "")).strip() or "(no detail)"
+        blocks.append("\n".join(lines) + f"\n\n[WireGuard]\n{wg}\n\n[BIRD]\n{bird}")
     for chunk in chunk_blocks(blocks):
         await message.answer(f"```\n{chunk}\n```", parse_mode="Markdown")
 
@@ -546,9 +587,14 @@ async def ping_cmd(message: Message, state: FSMContext) -> None:
     await run_lg(message, state, "ping")
 
 
-@dp.message(Command("trace", "mtr"), default_state)
+@dp.message(Command("trace"), default_state)
 async def trace_cmd(message: Message, state: FSMContext) -> None:
     await run_lg(message, state, "trace")
+
+
+@dp.message(Command("mtr"), default_state)
+async def mtr_cmd(message: Message, state: FSMContext) -> None:
+    await run_lg(message, state, "mtr")
 
 
 @dp.message(Command("route"), default_state)
@@ -800,6 +846,9 @@ async def main() -> None:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
     bot = Bot(settings.telegram_bot_token)
     try:
+        # Register the "/" command menu so Telegram clients advertise exactly this command set.
+        # 註冊「/」指令選單,使 Telegram 用戶端顯示的指令集與此完全一致。
+        await bot.set_my_commands(BOT_COMMANDS)
         await dp.start_polling(bot)
     finally:
         await backend.aclose()

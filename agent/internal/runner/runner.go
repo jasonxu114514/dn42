@@ -20,7 +20,9 @@ import (
 type Runner struct {
 	BirdcPath        string
 	TraceroutePath   string
+	MtrPath          string
 	PingPath         string
+	WgPath           string
 	WgQuickPath      string
 	Timeout          time.Duration
 	WireGuardPeerDir string
@@ -83,7 +85,9 @@ func New(cfg config.Config) Runner {
 	return Runner{
 		BirdcPath:        cfg.BirdcPath,
 		TraceroutePath:   cfg.TraceroutePath,
+		MtrPath:          cfg.MtrPath,
 		PingPath:         cfg.PingPath,
+		WgPath:           cfg.WgPath,
 		WgQuickPath:      cfg.WgQuickPath,
 		Timeout:          cfg.Timeout(),
 		WireGuardPeerDir: cfg.WireGuardPeerDir,
@@ -254,6 +258,27 @@ func (r Runner) Trace(target string) Result {
 	return r.run(args...)
 }
 
+// Mtr runs `mtr` in report mode so it sends a fixed number of cycles, prints a per-hop report, and
+// exits — the only non-interactive form usable over the API. `--no-dns` mirrors traceroute's `-n`
+// (numeric output) and `--report-wide` keeps long IPv6 addresses from being truncated. `-6` is
+// forced for IPv6 literal targets, matching Trace; a hostname is left for mtr to resolve itself.
+// Validation and the fixed argv are identical to Trace, so mtr cannot reach a wider target space.
+// Mtr 以 report 模式執行 `mtr`:送出固定次數的循環、印出每躍點報告後結束——這是經由 API 唯一可用的
+// 非互動形式。`--no-dns` 對應 traceroute 的 `-n`(數字輸出),`--report-wide` 避免長 IPv6 位址被截斷。
+// IPv6 字面目標強制 `-6`(與 Trace 一致);主機名則交由 mtr 自行解析。驗證與固定 argv 與 Trace 相同,
+// 故 mtr 無法觸及更廣的目標範圍。
+func (r Runner) Mtr(target string) Result {
+	if err := ValidateHostTarget(target); err != nil {
+		return Result{OK: false, Output: err.Error()}
+	}
+	args := []string{r.MtrPath, "--report", "--report-cycles", "4", "--no-dns", "--report-wide"}
+	if ip := net.ParseIP(target); ip != nil && ip.To4() == nil {
+		args = append(args, "-6") // force IPv6 for IPv6 targets
+	}
+	args = append(args, target)
+	return r.run(args...)
+}
+
 // Route runs `birdc show route for <target>`. The `for` keyword makes BIRD do a longest-prefix
 // forwarding lookup — returning the route actually used to reach the target — so a bare host IP
 // (which has no exact table entry) resolves to its covering route, and a prefix such as 1.1.1.0/24
@@ -284,6 +309,23 @@ func (r Runner) PeerStatus(protocolName string) Result {
 		return Result{OK: false, Output: "invalid protocol_name"}
 	}
 	return r.run(r.BirdcPath, "show", "protocols", "all", protocolName)
+}
+
+// PeerWireGuard returns a single peer's WireGuard tunnel status via `wg show <interface>`. wg-quick
+// names the interface after the config file's basename, so the interface name equals the peer's
+// protocol name (e.g. DN42_0090) — the same value used for the .conf files and the BIRD protocol.
+// When the tunnel is not up, `wg show` exits non-zero with "No such device"; that output is still
+// returned (OK=false) since it is useful status. protocolName is validated and passed as fixed argv.
+// PeerWireGuard 以 `wg show <介面>` 回傳單一對等的 WireGuard 隧道狀態。wg-quick 以設定檔基本名命名介面,
+// 故介面名等同對等的 protocol name(如 DN42_0090)——亦即 .conf 檔與 BIRD protocol 所用的同一值。隧道
+// 未啟動時 `wg show` 以「No such device」非零結束,其輸出仍會回傳(OK=false),因為那是有用的狀態。
+// protocolName 經驗證並以固定 argv 傳入。
+func (r Runner) PeerWireGuard(protocolName string) Result {
+	protocolName = strings.TrimSpace(protocolName)
+	if !safeNameRE.MatchString(protocolName) {
+		return Result{OK: false, Output: "invalid protocol_name"}
+	}
+	return r.run(r.WgPath, "show", protocolName)
 }
 
 func (r Runner) DeployPeer(req DeployRequest) DeployResult {

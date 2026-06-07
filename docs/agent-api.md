@@ -53,7 +53,20 @@ Runs fixed argv (`-6` is added for IPv6 targets):
 traceroute -n -q 1 -w 2 -m 20 <target>
 ```
 
-`POST /v1/lg/mtr` is kept as a back-compat alias that runs the same traceroute.
+## `POST /v1/lg/mtr`
+
+Target must be a single IP address (any IPv4 or IPv6) or a DNS hostname; mtr resolves the hostname
+itself. Same validation as `/v1/lg/trace`.
+
+Runs `mtr` in report mode (`-6` is added for IPv6 targets):
+
+```text
+mtr --report --report-cycles 4 --no-dns --report-wide <target>
+```
+
+Report mode sends a fixed number of cycles, prints a per-hop report, and exits — the only
+non-interactive form. `--no-dns` mirrors traceroute's `-n`; `--report-wide` keeps long IPv6
+addresses from being truncated.
 
 ## `POST /v1/lg/route`
 
@@ -120,16 +133,25 @@ Body:
 }
 ```
 
-Runs fixed argv:
+Runs two fixed-argv commands and returns both in one response:
 
 ```text
 birdc show protocols all <protocol_name>
+wg show <protocol_name>
 ```
 
-Returns the detailed BIRD state for a single peer (BGP state, last error such as `Connection
-reset`, route counts). Used by the Telegram `/peer` (alias `/status`) command, which queries each
-of the caller's own peers. `protocol_name` is validated against the same safe-name pattern as
-deploy/remove, and the call is bounded by `max_concurrency` like the other looking-glass reads.
+```json
+{"ok": true, "output": "<birdc output>", "wireguard": "<wg show output>"}
+```
+
+`output` is the detailed BIRD state for a single peer (BGP state, last error such as `Connection
+reset`, route counts) and `ok` reflects that BIRD query; `wireguard` is the peer's WireGuard tunnel
+status (latest handshake, transfer, endpoint). The interface name equals `protocol_name` because
+wg-quick names the interface after the config file; when the tunnel is down, `wg show` reports no
+such device and that text is returned in `wireguard`. Used by the Telegram `/listpeers` command,
+which queries each of the caller's own peers. `protocol_name` is validated against the same
+safe-name pattern as deploy/remove, and the call is bounded by `max_concurrency` like the other
+looking-glass reads.
 
 ## Concurrency
 

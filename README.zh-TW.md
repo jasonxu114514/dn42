@@ -174,18 +174,20 @@ agent 端解析）；`route` 採最長前綴查找,故單一主機 IP 或 `1.1.1
 ## Telegram
 
 ```text
-/login                 連結你的 dn42 ASN（Kioubit）
-/peer、/status         你的對等：狀態、提供對端的我方參數與即時 BGP 狀態
+/login                 登入你的 dn42 ASN（Kioubit）
+/logout                登出你的 dn42 ASN（解除連結；對等保留）
+/listpeers             你的對等：我方端點／公鑰／隧道內 IP、WireGuard 與 BGP 狀態
 /create                建立對等（引導式精靈）
 /edit                  編輯你的某個對等（引導式精靈）
 /delete                刪除你的某個對等（引導式精靈）
 /ping  <ip-或-主機名>            隨機 PoP，可用按鈕切換
-/trace <ip-或-主機名>            隨機 PoP，可用按鈕切換（保留 /mtr 作為別名）
+/trace <ip-或-主機名>            隨機 PoP，可用按鈕切換
+/mtr   <ip-或-主機名>            隨機 PoP，可用按鈕切換
 /route <前綴-或-ip>              隨機 PoP，可用按鈕切換
 /cancel                中止目前的引導式動作
 ```
 
-各 looking glass 指令（`/ping`、`/trace`／`/mtr`、`/route`）只接受目標；bot 會立即在隨機 PoP 上執行
+各 looking glass 指令（`/ping`、`/trace`、`/mtr`、`/route`）只接受目標；bot 會立即在隨機 PoP 上執行
 並顯示輸出，並附上每個 PoP 一個內嵌按鈕——點按鈕即在該 PoP 重跑並就地更新結果。（舊的
 `/ping <ip> <agent>` 位置參數已移除。）
 

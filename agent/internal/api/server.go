@@ -36,6 +36,19 @@ type peerStatusRequest struct {
 	ProtocolName string `json:"protocol_name"`
 }
 
+// peerStatusResponse carries both halves of a peer's live state in one round-trip: Output is the
+// BIRD protocol detail (`birdc show protocols all <name>`) and WireGuard is the tunnel status
+// (`wg show <name>`). Output keeps its name for backward compatibility with callers that only read
+// the BIRD text; WireGuard is additive. OK reflects the BIRD query (the primary signal).
+// peerStatusResponse 以單次往返同時帶回對等的兩段即時狀態:Output 為 BIRD protocol 細節
+// (`birdc show protocols all <name>`),WireGuard 為隧道狀態(`wg show <name>`)。Output 維持原名以
+// 相容僅讀取 BIRD 文字的呼叫端;WireGuard 為新增。OK 反映 BIRD 查詢(主要訊號)。
+type peerStatusResponse struct {
+	OK        bool   `json:"ok"`
+	Output    string `json:"output"`
+	WireGuard string `json:"wireguard"`
+}
+
 // pubkeyResponse carries the agent's configured WireGuard public key to the control plane, which
 // caches it on the agent record and substitutes it into each peer's generated config.
 type pubkeyResponse struct {
@@ -48,7 +61,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/pubkey", s.auth(s.pubkey))
 	mux.HandleFunc("/v1/lg/ping", s.auth(s.limit(s.withTarget(s.Runner.Ping))))
 	mux.HandleFunc("/v1/lg/trace", s.auth(s.limit(s.withTarget(s.Runner.Trace))))
-	mux.HandleFunc("/v1/lg/mtr", s.auth(s.limit(s.withTarget(s.Runner.Trace)))) // back-compat alias for trace
+	mux.HandleFunc("/v1/lg/mtr", s.auth(s.limit(s.withTarget(s.Runner.Mtr))))
 	mux.HandleFunc("/v1/lg/route", s.auth(s.limit(s.withTarget(s.Runner.Route))))
 	mux.HandleFunc("/v1/peers/deploy", s.auth(s.deployPeer))
 	mux.HandleFunc("/v1/peers/remove", s.auth(s.removePeer))
@@ -164,7 +177,13 @@ func (s *Server) peerStatus(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, 1024, &req, fail) {
 		return
 	}
-	writeJSON(w, http.StatusOK, s.Runner.PeerStatus(req.ProtocolName))
+	// One round-trip returns both the BIRD protocol detail and the WireGuard tunnel status for this
+	// peer; the two local commands run sequentially within this single concurrency slot.
+	// 單次往返同時回傳此對等的 BIRD protocol 細節與 WireGuard 隧道狀態;兩個本地命令在此單一併發配額內
+	// 依序執行。
+	bird := s.Runner.PeerStatus(req.ProtocolName)
+	wg := s.Runner.PeerWireGuard(req.ProtocolName)
+	writeJSON(w, http.StatusOK, peerStatusResponse{OK: bird.OK, Output: bird.Output, WireGuard: wg.Output})
 }
 
 func (s *Server) deployPeer(w http.ResponseWriter, r *http.Request) {

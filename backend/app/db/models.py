@@ -73,6 +73,9 @@ class Agent(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     location: Mapped[str] = mapped_column(String(128), default="")
+    # The PoP's public address: a bare IPv4/IPv6/domain (no scheme/port), validated by
+    # normalize_agent_host. Peers dial it over WireGuard; the listen port is derived from the
+    # peer's ASN. (The agent's own control channel is the WSS it dials out on, not this field.)
     url: Mapped[str] = mapped_column(String(512))
     token: Mapped[str] = mapped_column(String(255), default="")
     # Our WireGuard public key on this PoP, reported by the agent over WSS and shown to peers in

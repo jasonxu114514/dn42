@@ -1,8 +1,7 @@
-from urllib.parse import urlsplit
-
 from app.db.models import Agent, PeerRequest
 from app.peer.validation import (
     asn_link_local_address,
+    extract_agent_host,
     normalize_asn_number,
     normalize_wireguard_mtu,
     wireguard_listen_port,
@@ -10,10 +9,9 @@ from app.peer.validation import (
 
 
 def agent_wireguard_endpoint(peer: PeerRequest, agent: Agent) -> str:
-    """Public WireGuard endpoint a peer dials: the agent host plus the derived listen port."""
-    parsed = urlsplit(agent.url if "://" in agent.url else f"//{agent.url}")
-    host = parsed.hostname or agent.url.strip()
-    if ":" in host:  # bare IPv6, wrap for host:port form
+    """Public WireGuard endpoint a peer dials: the PoP host plus the derived listen port."""
+    host = extract_agent_host(agent.url)
+    if ":" in host:  # bare IPv6 — wrap for host:port form
         host = f"[{host}]"
     try:
         port = wireguard_listen_port(peer.asn)

@@ -31,6 +31,7 @@ from app.peer.validation import (
     MAX_WIREGUARD_MTU,
     MIN_WIREGUARD_MTU,
     asn_link_local_address,
+    normalize_agent_host,
     normalize_asn_number,
 )
 from app.web.deps import Pagination, flash, render, require_admin, settings
@@ -273,9 +274,13 @@ def admin_create_agent(
     _admin: User = Depends(require_admin),
 ) -> RedirectResponse:
     name = name.strip()
-    url = url.strip()
-    if not name or not url:
-        flash(request, "Agent name and URL are required.", "error")
+    if not name:
+        flash(request, "Agent name is required.", "error")
+        return RedirectResponse("/admin/agents", status_code=303)
+    try:
+        url = normalize_agent_host(url)
+    except ValueError as exc:
+        flash(request, str(exc), "error")
         return RedirectResponse("/admin/agents", status_code=303)
     if db.query(Agent).filter(Agent.name == name).one_or_none() is not None:
         flash(request, f"An agent named '{name}' already exists.", "error")
@@ -309,9 +314,13 @@ def admin_update_agent(
         raise HTTPException(status_code=404, detail="Agent not found")
     edit_url = f"/admin/agents/{agent_id}/edit"
     name = name.strip()
-    url = url.strip()
-    if not name or not url:
-        flash(request, "Agent name and URL are required.", "error")
+    if not name:
+        flash(request, "Agent name is required.", "error")
+        return RedirectResponse(edit_url, status_code=303)
+    try:
+        url = normalize_agent_host(url)
+    except ValueError as exc:
+        flash(request, str(exc), "error")
         return RedirectResponse(edit_url, status_code=303)
     existing = db.query(Agent).filter(Agent.name == name, Agent.id != agent.id).one_or_none()
     if existing is not None:

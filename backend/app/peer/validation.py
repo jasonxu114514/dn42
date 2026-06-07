@@ -56,6 +56,48 @@ def normalize_endpoint(value: str) -> str:
     return f"{host}:{port}"
 
 
+def extract_agent_host(value: str) -> str:
+    """Reduce a stored PoP public address to a bare host (drop scheme, path, brackets, and :port).
+
+    Tolerant by design so a legacy URL-form value (``https://pop.example.net``) and the new
+    bare-host form both resolve to the host a peer's WireGuard should dial. A bare IPv6 literal is
+    returned unbracketed (it always has ≥2 colons, so it is not mistaken for ``host:port``).
+    """
+    host = value.strip()
+    if "://" in host:
+        host = host.split("://", 1)[1]
+    host = host.split("/", 1)[0]
+    if host.startswith("[") and "]" in host:  # [ipv6] or [ipv6]:port
+        return host[1:].split("]", 1)[0]
+    if host.count(":") == 1:  # host:port — a bare IPv6 always has ≥2 colons
+        host = host.split(":", 1)[0]
+    return host
+
+
+def normalize_agent_host(value: str) -> str:
+    """Validate a PoP's public address: a bare IPv4, IPv6, or domain — no scheme, no port.
+
+    Only the host is stored; the WireGuard port a peer dials is derived from its ASN
+    (see ``wireguard_listen_port``). A pasted scheme/port is stripped for convenience, and the
+    remainder must be a valid address. 本 PoP 對外位址：純 IPv4 / IPv6 / 網域（不含 scheme 與埠）。
+    """
+    raw = value.strip()
+    if not raw:
+        raise ValueError("PoP public address is required")
+    if len(raw) > 255:
+        raise ValueError("PoP public address is too long")
+    host = extract_agent_host(raw)
+    if host:
+        try:
+            ip_address(host)  # accepts both IPv4 and IPv6 literals
+            return host
+        except ValueError:
+            pass
+        if _HOSTNAME_RE.fullmatch(host):
+            return host
+    raise ValueError("PoP public address must be an IPv4, IPv6, or domain name (no scheme or port)")
+
+
 def normalize_wireguard_key(value: str) -> str:
     """Validate a base64-encoded WireGuard public key (32 bytes -> 44 chars)."""
     value = value.strip()

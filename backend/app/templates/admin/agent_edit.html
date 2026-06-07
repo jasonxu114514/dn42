@@ -10,10 +10,11 @@
   <form method="post" action="/admin/agents/{{ agent.id }}/update" class="form-grid">
     <label class="field">Name<input name="name" value="{{ agent.name }}" required></label>
     <label class="field">Location<input name="location" value="{{ agent.location }}"></label>
-    <label class="field">Endpoint URL<input name="url" value="{{ agent.url }}" required></label>
+    <label class="field">Public address<input name="url" value="{{ agent.url }}" placeholder="pop.example.net or 172.20.0.1" required></label>
     <label class="checkbox-label"><input type="checkbox" name="enabled" {% if agent.enabled %}checked{% endif %}> Enabled</label>
     <button type="submit" class="btn-primary">Save</button>
   </form>
+  <p class="muted" style="margin-top:10px">Peers dial this IPv4/IPv6/domain over WireGuard; the listen port is derived from each peer's ASN.</p>
 </div>
 
 <div class="card">

@@ -1,0 +1,15 @@
+{
+  "listen": "127.0.0.1:8080",
+  "token": "change-me",
+  "max_concurrency": 4,
+  "command_timeout_seconds": 12,
+  "birdc_path": "/usr/sbin/birdc",
+  "ping_path": "ping",
+  "traceroute_path": "traceroute",
+  "wg_quick_path": "/usr/bin/wg-quick",
+  "wireguard_peer_dir": "/etc/wireguard",
+  "bird_peer_dir": "/etc/bird/peers",
+  "deploy_reload_cmd": "systemctl reload bird",
+  "wireguard_private_key": "change-me",
+  "wireguard_public_key": "change-me"
+}

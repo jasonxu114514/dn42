@@ -4,13 +4,9 @@ After=network-online.target bird.service
 Wants=network-online.target
 
 [Service]
-Environment=AGENT_LISTEN=127.0.0.1:8080
-Environment=AGENT_TOKEN=change-me
-Environment=BIRDC_PATH=/usr/sbin/birdc
-Environment=WG_QUICK_PATH=/usr/bin/wg-quick
-Environment=WIREGUARD_PRIVATE_KEY=change-me
-Environment=WIREGUARD_PUBLIC_KEY=change-me
-ExecStart=/usr/local/bin/dn42-autopeer-agent
+# All settings (including the bearer token and WireGuard private key) live in the config file.
+# Copy agent/config.example.json there and restrict it: chown root:root, chmod 0600.
+ExecStart=/usr/local/bin/dn42-autopeer-agent -config /etc/dn42-autopeer/agent.json
 Restart=on-failure
 User=root
 Group=root

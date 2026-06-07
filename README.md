@@ -113,13 +113,13 @@ python start.py
 ```sh
 cd agent
 go build ./cmd/agent
-AGENT_LISTEN=:8080 AGENT_TOKEN=<token-from-admin-panel> \
-  WIREGUARD_PRIVATE_KEY=<router-private-key> WIREGUARD_PUBLIC_KEY=<router-public-key> ./agent
+cp config.example.json config.json    # then edit config.json: keys, token, tool paths
+./agent                               # reads ./config.json; or: ./agent -config /etc/dn42-autopeer/agent.json
 ```
 
 The backend starts with no agents. Add each router in the admin panel (name, location, Agent API
-URL); the backend generates each agent's bearer token for you. Set that token as `AGENT_TOKEN` on
-the corresponding router.
+URL); the backend generates each agent's bearer token for you. Set that token as `token` in the
+corresponding router's `config.json`.
 
 ## Configuration reference
 
@@ -146,19 +146,23 @@ Generate strong secrets with `python -c "import secrets; print(secrets.token_url
 backend **refuses to start** while `SESSION_SECRET` or `TELEGRAM_BACKEND_SECRET` is a placeholder
 (`change-me`, `dev-…`, empty) unless `ALLOW_INSECURE_DEFAULTS=1` (or `start.py --allow-http`).
 
-### Agent (environment)
+### Agent (`config.json`)
 
-| Variable | Default | Purpose |
+The agent reads a single JSON file — `./config.json` by default, or the path passed to `-config`.
+Copy `agent/config.example.json` and fill it in. The file holds secrets (the bearer token and the
+WireGuard private key), so keep it root-owned and `chmod 0600`.
+
+| Key | Default | Purpose |
 | --- | --- | --- |
-| `AGENT_LISTEN` | `:8080` | Listen address. |
-| `AGENT_TOKEN` | _(empty)_ | Bearer token required on every request (from the admin panel). Empty ⇒ no auth. |
-| `AGENT_MAX_CONCURRENCY` | `4` | Concurrent looking-glass commands; extra requests get `429` instead of queueing (`0` disables the cap). |
-| `BIRDC_PATH` / `TRACEROUTE_PATH` / `PING_PATH` / `WG_QUICK_PATH` | `birdc` / `traceroute` / `ping` / `wg-quick` | Tool paths. |
-| `AGENT_DEPLOY_DIR` | `/etc/dn42-autopeer` | Base directory for written configs. |
-| `WIREGUARD_PEER_DIR` / `BIRD_PEER_DIR` | `<deploy>/wireguard` / `/etc/bird/peers` | Per-peer snippet directories. |
-| `WIREGUARD_PRIVATE_KEY` | _(empty)_ | Router private key substituted into generated WireGuard configs. |
-| `WIREGUARD_PUBLIC_KEY` | _(required)_ | Router public key for this PoP. The agent refuses to start without a valid value and serves it on `GET /v1/pubkey`; the backend caches it and fills it into each peer's generated config. |
-| `AGENT_DEPLOY_RELOAD_CMD` | _(empty)_ | Command run (fixed argv) after writing files, e.g. `systemctl reload bird`. |
+| `listen` | `:8080` | Listen address. |
+| `token` | _(empty)_ | Bearer token required on every request (from the admin panel). Empty ⇒ no auth. |
+| `max_concurrency` | `4` | Concurrent looking-glass commands; extra requests get `429` instead of queueing (`0` disables the cap). |
+| `command_timeout_seconds` | `12` | Timeout for each external command (`ping`/`traceroute`/`birdc`/`wg-quick`). |
+| `birdc_path` / `traceroute_path` / `ping_path` / `wg_quick_path` | `birdc` / `traceroute` / `ping` / `wg-quick` | Tool paths. |
+| `wireguard_peer_dir` / `bird_peer_dir` | `/etc/wireguard` / `/etc/bird/peers` | Per-peer snippet directories. |
+| `wireguard_private_key` | _(empty)_ | Router private key substituted into generated WireGuard configs. |
+| `wireguard_public_key` | _(required)_ | Router public key for this PoP. The agent refuses to start without a valid value and serves it on `GET /v1/pubkey`; the backend caches it and fills it into each peer's generated config. |
+| `deploy_reload_cmd` | _(empty)_ | Command run (fixed argv) after writing files, e.g. `systemctl reload bird`. |
 
 ## Looking glass
 
@@ -170,7 +174,7 @@ such as `1.1.1.0/24` both resolve to the route actually used.
 > **Target range:** the looking glass accepts **any** IPv4/IPv6 address or prefix (and a hostname
 > for `ping`/`trace`) — not just dn42
 > space. This is deliberate. Abuse is bounded by the per-IP rate limit (`LG_RATE_LIMIT`) and the
-> agent concurrency cap (`AGENT_MAX_CONCURRENCY`), and targets are validated and passed as fixed
+> agent concurrency cap (`max_concurrency`), and targets are validated and passed as fixed
 > argv (never through a shell). If you do not want public reachability of arbitrary addresses, put
 > the service behind authentication or a network boundary.
 
@@ -207,7 +211,7 @@ backend testing without Telegram, use `python start.py --allow-http`.
 ## Agent
 
 WireGuard configs are complete `wg-quick` files written as `dn42p<peer-id>.conf`; the agent runs
-`wg-quick down`/`up` and then reloads BIRD if `AGENT_DEPLOY_RELOAD_CMD` is set. BIRD snippets follow
+`wg-quick down`/`up` and then reloads BIRD if `deploy_reload_cmd` is set. BIRD snippets follow
 the dn42 wiki MP-BGP-over-IPv6 (Extended Next Hop) style, so your main BIRD config must define a
 `template bgp dnpeers` and include the peer directory, for example:
 
@@ -243,8 +247,8 @@ See the [auth flow](docs/auth-flow.md) for the full web and Telegram login seque
 | Backend exits: *"Refusing to start with insecure default secrets"* | Set strong `SESSION_SECRET` and `TELEGRAM_BACKEND_SECRET`, or pass `--allow-http` for local testing. |
 | *"Telegram verification needs HTTPS"* on start | `DOMAIN` is not an HTTPS URL. Use a public HTTPS domain, or `--allow-http` (Mini App verification stays disabled). |
 | `uvicorn`/`httpx` missing in an existing `.venv` | Reinstall: `pip install -e .` inside the venv. |
-| Looking glass: *"could not reach the looking glass agent"* | Agent not running, wrong Agent URL, or token mismatch between the admin panel and `AGENT_TOKEN`. |
-| Looking glass returns `429` | Per-IP rate limit (`LG_RATE_LIMIT`) or agent busy (`AGENT_MAX_CONCURRENCY`). |
+| Looking glass: *"could not reach the looking glass agent"* | Agent not running, wrong Agent URL, or token mismatch between the admin panel and the agent's `token`. |
+| Looking glass returns `429` | Per-IP rate limit (`LG_RATE_LIMIT`) or agent busy (`max_concurrency`). |
 | BGP session never comes up | Ensure the main BIRD config defines `template bgp dnpeers` and includes the peer directory. |
 
 ## Layout

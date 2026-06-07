@@ -1,6 +1,8 @@
 # Agent API
 
-All routes accept `Authorization: Bearer <AGENT_TOKEN>` when `AGENT_TOKEN` is configured.
+The agent loads all settings from a JSON config file (default `./config.json`, override with
+`-config /path/config.json`). All routes accept `Authorization: Bearer <token>` when a `token` is
+configured in that file.
 
 ## `GET /v1/status`
 
@@ -12,16 +14,15 @@ birdc show protocols
 
 ## `GET /v1/pubkey`
 
-Returns the agent's own WireGuard public key (set via the `WIREGUARD_PUBLIC_KEY` environment
-variable). The control plane caches it per PoP and substitutes it into each peer's generated
-config:
+Returns the agent's own WireGuard public key (set via `wireguard_public_key` in the config file).
+The control plane caches it per PoP and substitutes it into each peer's generated config:
 
 ```json
 {"public_key": "<44-character base64 key>"}
 ```
 
-Runs no command (so it is not bounded by `AGENT_MAX_CONCURRENCY`), but still requires the bearer
-token. The agent refuses to start without a valid `WIREGUARD_PUBLIC_KEY`, so this never returns an
+Runs no command (so it is not bounded by `max_concurrency`), but still requires the bearer
+token. The agent refuses to start without a valid `wireguard_public_key`, so this never returns an
 empty value.
 
 ## `POST /v1/lg/ping`
@@ -83,10 +84,10 @@ Body:
 }
 ```
 
-The agent validates the request, replaces `{{WIREGUARD_PRIVATE_KEY}}` with its
-`WIREGUARD_PRIVATE_KEY` environment value, writes one WireGuard `wg-quick` config and one BIRD
+The agent validates the request, replaces `{{WIREGUARD_PRIVATE_KEY}}` with the
+`wireguard_private_key` from its config, writes one WireGuard `wg-quick` config and one BIRD
 snippet, runs `wg-quick down/up` for the WireGuard file, and returns the written file paths. If
-`AGENT_DEPLOY_RELOAD_CMD` is set, it is split into fixed argv and run after the files are written.
+`deploy_reload_cmd` is set, it is split into fixed argv and run after the files are written.
 
 ## `POST /v1/peers/remove`
 
@@ -100,7 +101,7 @@ Body:
 ```
 
 Tears a peer down: runs `wg-quick down` on its WireGuard file (if present), deletes the WireGuard
-and BIRD snippet files for `protocol_name`, and runs `AGENT_DEPLOY_RELOAD_CMD` if set. Used by the
+and BIRD snippet files for `protocol_name`, and runs `deploy_reload_cmd` if set. Used by the
 backend when a peer is disabled or deleted so revoked peers do not keep an active tunnel or BGP
 session. `protocol_name` is validated and resolved only inside the agent's peer directories.
 
@@ -123,10 +124,10 @@ birdc show protocols all <protocol_name>
 Returns the detailed BIRD state for a single peer (BGP state, last error such as `Connection
 reset`, route counts). Used by the Telegram `/status` command, which queries each of the caller's
 own peers. `protocol_name` is validated against the same safe-name pattern as deploy/remove, and
-the call is bounded by `AGENT_MAX_CONCURRENCY` like the other looking-glass reads.
+the call is bounded by `max_concurrency` like the other looking-glass reads.
 
 ## Concurrency
 
-Looking glass endpoints (`/v1/status`, `/v1/lg/*`) are bounded by `AGENT_MAX_CONCURRENCY`
+Looking glass endpoints (`/v1/status`, `/v1/lg/*`) are bounded by `max_concurrency`
 (default 4). When that many commands are already running, further requests get `429 Too Many
 Requests` instead of queueing, so a flood of public queries cannot exhaust the router.

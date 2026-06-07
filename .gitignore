@@ -12,6 +12,9 @@ autopeer.db
 agent/agent
 agent/agent.exe
 
+# Agent config (contains secrets; copy from agent/config.example.json)
+agent/config.json
+
 # OS/editor
 .DS_Store
 Thumbs.db

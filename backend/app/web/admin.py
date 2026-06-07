@@ -105,7 +105,7 @@ def admin_refresh_agent_pubkey(
         raise HTTPException(
             status_code=400,
             detail="Could not fetch a valid WireGuard public key from the agent. Check the agent "
-            "URL/token and that WIREGUARD_PUBLIC_KEY is set on the agent, then retry.",
+            "URL/token and that wireguard_public_key is set in the agent's config, then retry.",
         )
     agent.wg_public_key = key
     db.commit()

@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"dn42-autopeer-agent/internal/config"
 )
 
 type Runner struct {
@@ -69,19 +71,23 @@ var (
 	wgKeyRE        = regexp.MustCompile(`^[A-Za-z0-9+/]{43}=$`)
 )
 
-func New() Runner {
-	deployDir := envOr("AGENT_DEPLOY_DIR", "/etc/dn42-autopeer")
+// New builds a Runner from the loaded config. The WireGuard peer directory defaults to
+// /etc/wireguard (wg-quick's conventional location) via config defaults; deployed peer files are
+// still addressed by their full path, so a non-default wireguard_peer_dir keeps working.
+// New 依載入的設定建立 Runner。WireGuard 對等目錄透過設定預設為 /etc/wireguard(wg-quick 的慣用位置);
+// 部署的對等檔仍以完整路徑定位,故將 wireguard_peer_dir 設為非預設值也能運作。
+func New(cfg config.Config) Runner {
 	return Runner{
-		BirdcPath:        envOr("BIRDC_PATH", "birdc"),
-		TraceroutePath:   envOr("TRACEROUTE_PATH", "traceroute"),
-		PingPath:         envOr("PING_PATH", "ping"),
-		WgQuickPath:      envOr("WG_QUICK_PATH", "wg-quick"),
-		Timeout:          12 * time.Second,
-		WireGuardPeerDir: envOr("WIREGUARD_PEER_DIR", filepath.Join(deployDir, "wireguard")),
-		BirdPeerDir:      envOr("BIRD_PEER_DIR", "/etc/bird/peers"),
-		DeployReloadCmd:  strings.TrimSpace(os.Getenv("AGENT_DEPLOY_RELOAD_CMD")),
-		WireGuardKey:     strings.TrimSpace(os.Getenv("WIREGUARD_PRIVATE_KEY")),
-		WireGuardPubKey:  strings.TrimSpace(os.Getenv("WIREGUARD_PUBLIC_KEY")),
+		BirdcPath:        cfg.BirdcPath,
+		TraceroutePath:   cfg.TraceroutePath,
+		PingPath:         cfg.PingPath,
+		WgQuickPath:      cfg.WgQuickPath,
+		Timeout:          cfg.Timeout(),
+		WireGuardPeerDir: cfg.WireGuardPeerDir,
+		BirdPeerDir:      cfg.BirdPeerDir,
+		DeployReloadCmd:  cfg.DeployReloadCmd,
+		WireGuardKey:     cfg.WireGuardPrivateKey,
+		WireGuardPubKey:  cfg.WireGuardPublicKey,
 	}
 }
 
@@ -93,13 +99,6 @@ func New() Runner {
 // 對等端金鑰的要求一致。
 func ValidWireGuardKey(s string) bool {
 	return wgKeyRE.MatchString(strings.TrimSpace(s))
-}
-
-func envOr(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
-	}
-	return fallback
 }
 
 func parseCIDR(value string) *net.IPNet {
@@ -381,7 +380,7 @@ func (r Runner) renderWireGuardConfig(config string) (string, error) {
 	const placeholder = "{{WIREGUARD_PRIVATE_KEY}}"
 	if strings.Contains(config, placeholder) {
 		if r.WireGuardKey == "" {
-			return "", errors.New("WIREGUARD_PRIVATE_KEY is required for WireGuard deployment")
+			return "", errors.New("wireguard_private_key is required in the agent config for WireGuard deployment")
 		}
 		return strings.ReplaceAll(config, placeholder, r.WireGuardKey), nil
 	}

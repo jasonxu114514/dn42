@@ -8,6 +8,7 @@ from app.config import Settings
 from app.db.models import Node, PeerRequest, User, utcnow
 from app.peer.config import node_effective_asn, peering_info
 from app.peer.deploy import apply_deploy_result, deploy_peer, remove_peer
+from app.peer.queries import peer_with_node
 from app.peer.validation import (
     asn_link_local_address,
     is_link_local,
@@ -34,33 +35,126 @@ class NormalizedPeerInput:
     bgp_extended: bool
 
 
-def deploy_peer_request(peer: PeerRequest, settings: Settings) -> None:
+@dataclass(frozen=True)
+class NodeSnapshot:
+    id: str
+    name: str
+    url: str
+    enabled: bool
+    wg_public_key: str
+    asn: str
+    dn42_ipv4: str
+    dn42_ipv6: str
+
+
+@dataclass(frozen=True)
+class PeerSnapshot:
+    id: str
+    user_id: int
+    asn: str
+    node_id: str
+    endpoint: str
+    wg_public_key: str
+    wg_mtu: int
+    local_link_address: str
+    peer_link_address: str
+    peer_dn42_ipv4: str
+    peer_dn42_ipv6: str
+    bgp_extended: bool
+    status: str
+    deploy_status: str
+    deploy_output: str
+
+
+def _snapshot_peer(peer: PeerRequest) -> tuple[PeerSnapshot, NodeSnapshot]:
+    node = peer.node
+    return (
+        PeerSnapshot(
+            id=peer.id,
+            user_id=peer.user_id,
+            asn=peer.asn,
+            node_id=peer.node_id,
+            endpoint=peer.endpoint,
+            wg_public_key=peer.wg_public_key,
+            wg_mtu=peer.wg_mtu,
+            local_link_address=peer.local_link_address,
+            peer_link_address=peer.peer_link_address,
+            peer_dn42_ipv4=peer.peer_dn42_ipv4,
+            peer_dn42_ipv6=peer.peer_dn42_ipv6,
+            bgp_extended=peer.bgp_extended,
+            status=peer.status,
+            deploy_status=peer.deploy_status,
+            deploy_output=peer.deploy_output,
+        ),
+        NodeSnapshot(
+            id=node.id,
+            name=node.name,
+            url=node.url,
+            enabled=node.enabled,
+            wg_public_key=node.wg_public_key,
+            asn=node.asn,
+            dn42_ipv4=node.dn42_ipv4,
+            dn42_ipv6=node.dn42_ipv6,
+        ),
+    )
+
+
+def _load_peer_for_agent(db, peer: PeerRequest) -> PeerRequest:
+    loaded = peer_with_node(db, peer.id)
+    if loaded is None:
+        raise ValueError("Peer not found")
+    return loaded
+
+
+def deploy_peer_request(db, peer: PeerRequest, settings: Settings) -> PeerRequest:
+    """Commit the deploying marker before the synchronous agent round-trip."""
+    peer = _load_peer_for_agent(db, peer)
     peer.deploy_status = "deploying"
     peer.deploy_output = ""
     peer.updated_at = utcnow()
+    db.flush()
+    peer_snapshot, node_snapshot = _snapshot_peer(peer)
+    db.commit()
     try:
-        result = deploy_peer(peer, peer.node, settings)
-        apply_deploy_result(peer, result)
+        result = deploy_peer(peer_snapshot, node_snapshot, settings)
     except Exception as exc:
-        peer.deploy_status = "failed"
-        peer.deploy_output = str(exc)
-        peer.deployed_at = None
-        peer.updated_at = utcnow()
+        result = {"ok": False, "output": str(exc)}
+
+    updated = peer_with_node(db, peer_snapshot.id)
+    if updated is None:
+        raise ValueError("Peer not found")
+    apply_deploy_result(updated, result)
+    db.commit()
+    return updated
 
 
-def teardown_peer_request(peer: PeerRequest) -> None:
+def teardown_peer_request(db, peer: PeerRequest) -> PeerRequest:
+    """Commit pending peer changes before synchronously removing config from the node."""
+    peer = _load_peer_for_agent(db, peer)
     peer.updated_at = utcnow()
+    db.flush()
+    peer_snapshot, node_snapshot = _snapshot_peer(peer)
+    db.commit()
     try:
-        result = remove_peer(peer, peer.node)
-        if bool(result.get("ok", False)):
-            peer.deploy_status = "removed"
-            peer.deployed_at = None
-        else:
-            peer.deploy_status = "failed"
-        peer.deploy_output = str(result.get("output", result))
+        result = remove_peer(peer_snapshot, node_snapshot)
+        ok = bool(result.get("ok", False))
+        output = str(result.get("output", result))
     except Exception as exc:
-        peer.deploy_status = "failed"
-        peer.deploy_output = f"teardown failed: {exc}"
+        ok = False
+        output = f"teardown failed: {exc}"
+
+    updated = peer_with_node(db, peer_snapshot.id)
+    if updated is None:
+        raise ValueError("Peer not found")
+    if ok:
+        updated.deploy_status = "removed"
+        updated.deployed_at = None
+    else:
+        updated.deploy_status = "failed"
+    updated.deploy_output = output
+    updated.updated_at = utcnow()
+    db.commit()
+    return updated
 
 
 def find_peer_on_node(
@@ -236,7 +330,11 @@ def create_peer(
     bgp_extended: bool | str | None = True,
     wg_mtu: int | str | None = None,
 ) -> PeerRequest:
-    """Create, persist, and deploy a peer for ``user`` on ``node``."""
+    """Create, persist, and deploy a peer for ``user`` on ``node``.
+
+    This function commits. The row is visible as ``deploying`` before the synchronous agent call,
+    then updated with the final deploy result in a second short transaction.
+    """
     if find_peer_on_node(db, node.id, user.primary_asn) is not None:
         raise ValueError(
             "You already have a peer on this node. Edit or delete the existing one instead."
@@ -267,12 +365,12 @@ def create_peer(
         peer_dn42_ipv6=values.peer_dn42_ipv6,
         bgp_extended=values.bgp_extended,
         status="approved",
+        deploy_status="deploying",
     )
     peer.node = node
     db.add(peer)
     db.flush()
-    deploy_peer_request(peer, settings)
-    return peer
+    return deploy_peer_request(db, peer, settings)
 
 
 def update_peer(
@@ -291,8 +389,12 @@ def update_peer(
     peer_dn42_ipv4: str = "",
     peer_dn42_ipv6: str = "",
     bgp_extended: bool | str | None = True,
-) -> None:
-    """Update a peer's fields and optionally redeploy an approved peer."""
+) -> PeerRequest:
+    """Update a peer's fields and optionally redeploy an approved peer.
+
+    This function commits. Redeploy/teardown still happen synchronously, but only after the edited
+    peer state has been committed.
+    """
     if status not in {"approved", "disabled"}:
         raise ValueError("Unsupported peer status")
     duplicate = find_peer_on_node(db, node.id, peer.asn, exclude_id=peer.id)
@@ -324,20 +426,34 @@ def update_peer(
     peer.status = status
     peer.updated_at = utcnow()
     if status == "disabled":
-        teardown_peer_request(peer)
+        return teardown_peer_request(db, peer)
     elif redeploy:
-        deploy_peer_request(peer, settings)
+        return deploy_peer_request(db, peer, settings)
+    db.commit()
+    updated = peer_with_node(db, peer.id)
+    if updated is None:
+        raise ValueError("Peer not found")
+    return updated
 
 
 def delete_peer(db, *, peer: PeerRequest) -> None:
-    """Tear the peer down on its node (best effort) and delete the row. Caller commits."""
+    """Tear the peer down on its node (best effort) and delete the row.
+
+    This function commits. The agent teardown uses a snapshot after the read transaction is closed.
+    """
+    peer = _load_peer_for_agent(db, peer)
+    peer_snapshot, node_snapshot = _snapshot_peer(peer)
+    db.commit()
     try:
-        remove_peer(peer, peer.node)
+        remove_peer(peer_snapshot, node_snapshot)
     except Exception as exc:
         logger.warning(
             "Could not tear down peer %s on node %s before delete: %s",
-            peer.id,
-            peer.node.name,
+            peer_snapshot.id,
+            node_snapshot.name,
             exc,
         )
-    db.delete(peer)
+    fresh = peer_with_node(db, peer_snapshot.id)
+    if fresh is not None:
+        db.delete(fresh)
+        db.commit()

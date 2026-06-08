@@ -6,10 +6,9 @@ the user inline rather than via the require_admin dependency.
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from app.auth.session import current_user
-from app.db.models import Node, PeerRequest
 from app.db.session import get_db
 from app.lg.client import NodeClient
 from app.lg.summary import summarize_peer_bird, summarize_wireguard
@@ -19,6 +18,7 @@ from app.peer.config import (
     peering_info,
     render_user_config,
 )
+from app.peer.queries import enabled_node_by_id, owned_peer_with_node, peers_for_user_with_nodes
 from app.peer.service import create_peer, delete_peer, derive_peer_link_address, preview_peer
 from app.peer.validation import (
     DEFAULT_WIREGUARD_MTU,
@@ -36,14 +36,7 @@ def portal(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     user = current_user(request, db)
     if user is None:
         return RedirectResponse("/login", status_code=303)
-    # joinedload the node so the template's peer.node access does not lazy-load per row (N+1).
-    peers = (
-        db.query(PeerRequest)
-        .options(joinedload(PeerRequest.node))
-        .filter(PeerRequest.user_id == user.id)
-        .order_by(PeerRequest.created_at.desc())
-        .all()
-    )
+    peers = peers_for_user_with_nodes(db, user.id)
     return render(
         request,
         "portal.html",
@@ -95,7 +88,7 @@ def create_peer_request(
     user = current_user(request, db)
     if user is None:
         return RedirectResponse("/login", status_code=303)
-    node = query_enabled_nodes(db).filter(Node.id == node_id).one_or_none()
+    node = enabled_node_by_id(db, node_id)
     if node is None:
         flash(request, "Unknown or disabled node.", "error")
         return RedirectResponse("/portal/new", status_code=303)
@@ -117,12 +110,11 @@ def create_peer_request(
         # Surface validation/duplicate errors as a flash banner instead of a raw JSON 400.
         flash(request, str(exc), "error")
         return RedirectResponse("/portal/new", status_code=303)
-    db.commit()
     flash(request, "Peer created and deployment requested.", "success")
     return RedirectResponse("/portal", status_code=303)
 
 
-@router.post("/portal/peers/confirm", response_class=HTMLResponse)
+@router.post("/portal/peers/confirm", response_class=HTMLResponse, response_model=None)
 def confirm_peer_request(
     request: Request,
     node_id: str = Form(...),
@@ -138,7 +130,7 @@ def confirm_peer_request(
     user = current_user(request, db)
     if user is None:
         return RedirectResponse("/login", status_code=303)
-    node = query_enabled_nodes(db).filter(Node.id == node_id).one_or_none()
+    node = enabled_node_by_id(db, node_id)
     if node is None:
         flash(request, "Unknown or disabled node.", "error")
         return RedirectResponse("/portal/new", status_code=303)
@@ -179,13 +171,8 @@ async def peer_detail(
     user = current_user(request, db)
     if user is None:
         return RedirectResponse("/login", status_code=303)
-    peer = (
-        db.query(PeerRequest)
-        .options(joinedload(PeerRequest.node))
-        .filter(PeerRequest.id == peer_id)
-        .one_or_none()
-    )
-    if peer is None or peer.user_id != user.id:
+    peer = owned_peer_with_node(db, user.id, peer_id)
+    if peer is None:
         raise HTTPException(status_code=404, detail="Peer not found")
     node = peer.node
     # Live WireGuard + BGP session status, condensed; degrade to a notice if the node is down.
@@ -224,11 +211,10 @@ def portal_delete_peer(
     user = current_user(request, db)
     if user is None:
         return RedirectResponse("/login", status_code=303)
-    peer = db.query(PeerRequest).filter(PeerRequest.id == peer_id).one_or_none()
-    if peer is None or peer.user_id != user.id:
+    peer = owned_peer_with_node(db, user.id, peer_id)
+    if peer is None:
         raise HTTPException(status_code=404, detail="Peer not found")
     delete_peer(db, peer=peer)
-    db.commit()
     flash(request, "Peer deleted and torn down.", "success")
     return RedirectResponse("/portal", status_code=303)
 
@@ -238,13 +224,8 @@ def peer_config(peer_id: str, request: Request, db: Session = Depends(get_db)) -
     user = current_user(request, db)
     if user is None:
         return RedirectResponse("/login", status_code=303)
-    peer = (
-        db.query(PeerRequest)
-        .options(joinedload(PeerRequest.node))
-        .filter(PeerRequest.id == peer_id)
-        .one_or_none()
-    )
-    if peer is None or peer.user_id != user.id:
+    peer = owned_peer_with_node(db, user.id, peer_id)
+    if peer is None:
         raise HTTPException(status_code=404, detail="Peer not found")
     node = peer.node
     return render(

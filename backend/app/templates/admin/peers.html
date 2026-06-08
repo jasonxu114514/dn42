@@ -1,5 +1,5 @@
 {% extends "admin/layout.html" %}
-{% from "macros.html" import page_header, status_badge, deploy_badge %}
+{% from "macros.html" import page_header, status_badge, deploy_badge, pagination %}
 {% block title %}Peerings · {{ settings.app_name }}{% endblock %}
 {% block admin %}
 {{ page_header("Peerings", "Create, edit, redeploy, or remove any peer across all nodes.") }}
@@ -99,6 +99,7 @@
       </tbody>
     </table>
   </div>
+  {{ pagination(pg, "/admin/peers") }}
   {% else %}
   <div class="empty-state">No peers yet.</div>
   {% endif %}

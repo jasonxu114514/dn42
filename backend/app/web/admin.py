@@ -41,6 +41,7 @@ from app.web.deps import Pagination, flash, render, require_admin, settings
 router = APIRouter()
 
 LG_LOG_PER_PAGE = 50
+PEERS_PER_PAGE = 50
 
 
 def _clean_node_fields(asn: str, dn42_ipv4: str, dn42_ipv6: str) -> tuple[str, str, str]:
@@ -159,6 +160,7 @@ def admin_node_edit(
 @router.get("/admin/peers", response_class=HTMLResponse)
 def admin_peers(
     request: Request,
+    page: int = 1,
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -167,11 +169,14 @@ def admin_peers(
         default_local_link_address = asn_link_local_address(settings.local_asn)
     except ValueError:
         default_local_link_address = ""
-    # joinedload the node so the per-row peer.node access does not lazy-load (N+1).
+    total = db.query(func.count(PeerRequest.id)).scalar() or 0
+    pg = Pagination(page=page, per_page=PEERS_PER_PAGE, total=total)
     peers = (
         db.query(PeerRequest)
         .options(joinedload(PeerRequest.node))
         .order_by(PeerRequest.created_at.desc())
+        .limit(pg.per_page)
+        .offset(pg.offset)
         .all()
     )
     return render(
@@ -180,6 +185,7 @@ def admin_peers(
         {
             "nodes": nodes,
             "peers": peers,
+            "pg": pg,
             "default_local_link_address": default_local_link_address,
             "default_wireguard_mtu": DEFAULT_WIREGUARD_MTU,
             "wireguard_mtu_min": MIN_WIREGUARD_MTU,
@@ -489,7 +495,6 @@ def admin_create_peer(
     except ValueError as exc:
         flash(request, str(exc), "error")
         return RedirectResponse("/admin/peers", status_code=303)
-    db.commit()
     if peer.deploy_status == "deployed":
         flash(request, f"Peer for AS{asn_number} on {node.name} created and deployed.", "success")
     else:
@@ -527,7 +532,7 @@ def admin_update_peer(
         flash(request, "Unknown node.", "error")
         return RedirectResponse(edit_url, status_code=303)
     try:
-        update_peer(
+        peer = update_peer(
             db,
             peer=peer,
             node=node,
@@ -546,7 +551,6 @@ def admin_update_peer(
     except ValueError as exc:
         flash(request, str(exc), "error")
         return RedirectResponse(edit_url, status_code=303)
-    db.commit()
     flash(request, "Peer saved.", "success")
     return RedirectResponse(edit_url, status_code=303)
 
@@ -565,8 +569,7 @@ def admin_redeploy_peer(
     if peer.status != "approved":
         flash(request, "Only approved peers can be deployed.", "error")
         return RedirectResponse(edit_url, status_code=303)
-    deploy_peer_request(peer, settings)
-    db.commit()
+    peer = deploy_peer_request(db, peer, settings)
     if peer.deploy_status == "deployed":
         flash(request, "Peer redeployed.", "success")
     else:
@@ -585,7 +588,6 @@ def admin_delete_peer(
     if peer is None:
         raise HTTPException(status_code=404, detail="Peer not found")
     delete_peer(db, peer=peer)
-    db.commit()
     flash(request, "Deleted peer.", "success")
     return RedirectResponse("/admin/peers", status_code=303)
 

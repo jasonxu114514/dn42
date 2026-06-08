@@ -139,14 +139,12 @@ def bind_telegram(
 
 
 def get_user_by_telegram(db: Session, telegram_user_id: str) -> User | None:
-    binding = (
-        db.query(TelegramBinding)
+    return (
+        db.query(User)
+        .join(TelegramBinding, TelegramBinding.user_id == User.id)
         .filter(TelegramBinding.telegram_user_id == telegram_user_id)
         .one_or_none()
     )
-    if binding is None:
-        return None
-    return db.query(User).filter(User.id == binding.user_id).one_or_none()
 
 
 def unbind_telegram(db: Session, telegram_user_id: str) -> bool:

@@ -23,6 +23,7 @@ from app.db.session import get_db
 from app.lg.client import NodeClient
 from app.lg.summary import summarize_peer_bird, summarize_wireguard
 from app.peer.config import node_effective_asn, peer_protocol_name, peering_info
+from app.peer.queries import enabled_node_by_name, owned_peer_with_node, peers_for_user_with_nodes
 from app.peer.service import create_peer, delete_peer, preview_peer, update_peer
 from app.peer.validation import MAX_WIREGUARD_MTU, MIN_WIREGUARD_MTU, normalize_asn_number
 
@@ -261,12 +262,7 @@ def telegram_peer_status(telegram_user_id: str, db: Session = Depends(get_db)) -
     user = get_user_by_telegram(db, telegram_user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Telegram account is not verified")
-    peers = (
-        db.query(PeerRequest)
-        .filter(PeerRequest.user_id == user.id)
-        .order_by(PeerRequest.created_at.desc())
-        .all()
-    )
+    peers = peers_for_user_with_nodes(db, user.id)
     return {
         "asn": user.primary_asn,
         "peers": [
@@ -292,7 +288,7 @@ async def telegram_lg(payload: LGRequest, db: Session = Depends(get_db)) -> dict
     user = get_user_by_telegram(db, payload.telegram_user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Telegram account is not verified")
-    node = db.query(Node).filter(Node.name == payload.node, Node.enabled.is_(True)).one_or_none()
+    node = enabled_node_by_name(db, payload.node)
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
     try:
@@ -331,8 +327,8 @@ def _owned_peer(db: Session, telegram_user_id: str, peer_id: str) -> PeerRequest
     user = get_user_by_telegram(db, telegram_user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Telegram account is not verified")
-    peer = db.query(PeerRequest).filter(PeerRequest.id == peer_id).one_or_none()
-    if peer is None or peer.user_id != user.id:
+    peer = owned_peer_with_node(db, user.id, peer_id)
+    if peer is None:
         raise HTTPException(status_code=404, detail="Peer not found")
     return peer
 
@@ -345,7 +341,7 @@ def telegram_peer_preview(
     user = get_user_by_telegram(db, payload.telegram_user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Telegram account is not verified")
-    node = db.query(Node).filter(Node.name == payload.node, Node.enabled.is_(True)).one_or_none()
+    node = enabled_node_by_name(db, payload.node)
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
     try:
@@ -386,7 +382,7 @@ def telegram_peer_create(
     user = get_user_by_telegram(db, payload.telegram_user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Telegram account is not verified")
-    node = db.query(Node).filter(Node.name == payload.node, Node.enabled.is_(True)).one_or_none()
+    node = enabled_node_by_name(db, payload.node)
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
     try:
@@ -405,7 +401,6 @@ def telegram_peer_create(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    db.commit()
     return _peer_summary(peer)
 
 
@@ -421,7 +416,7 @@ def telegram_peer_edit(payload: PeerEditRequest, db: Session = Depends(get_db)) 
     )
     bgp_extended = payload.bgp_extended if payload.bgp_extended is not None else peer.bgp_extended
     try:
-        update_peer(
+        peer = update_peer(
             db,
             peer=peer,
             node=peer.node,
@@ -443,7 +438,6 @@ def telegram_peer_edit(payload: PeerEditRequest, db: Session = Depends(get_db)) 
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    db.commit()
     return _peer_summary(peer)
 
 
@@ -453,7 +447,6 @@ def telegram_peer_delete(
 ) -> dict[str, Any]:
     peer = _owned_peer(db, payload.telegram_user_id, payload.peer_id)
     delete_peer(db, peer=peer)
-    db.commit()
     return {"ok": True, "id": payload.peer_id}
 
 
@@ -464,12 +457,7 @@ async def telegram_status(
     user = get_user_by_telegram(db, payload.telegram_user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Telegram account is not verified")
-    peers = (
-        db.query(PeerRequest)
-        .filter(PeerRequest.user_id == user.id)
-        .order_by(PeerRequest.created_at.desc())
-        .all()
-    )
+    peers = peers_for_user_with_nodes(db, user.id)
 
     client = NodeClient()
 

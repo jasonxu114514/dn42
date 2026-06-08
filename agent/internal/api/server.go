@@ -7,13 +7,15 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"dn42-autopeer-agent/internal/runner"
 )
 
 type Server struct {
-	Runner runner.Runner
-	sem    chan struct{}
+	Runner   runner.Runner
+	sem      chan struct{}
+	deployMu sync.Mutex
 }
 
 // New builds the command dispatcher. When maxConcurrency > 0, looking-glass commands are
@@ -68,16 +70,28 @@ func (s *Server) Command(command string, payload json.RawMessage) (any, error) {
 		if err := decodeCommandPayload(payload, &req); err != nil {
 			return nil, err
 		}
-		return s.Runner.DeployPeer(req), nil
+		return s.deployPeer(req), nil
 	case "peers.remove":
 		var req runner.RemoveRequest
 		if err := decodeCommandPayload(payload, &req); err != nil {
 			return nil, err
 		}
-		return s.Runner.RemovePeer(req), nil
+		return s.removePeer(req), nil
 	default:
 		return nil, fmt.Errorf("unknown command %q", command)
 	}
+}
+
+func (s *Server) deployPeer(req runner.DeployRequest) runner.DeployResult {
+	s.deployMu.Lock()
+	defer s.deployMu.Unlock()
+	return s.Runner.DeployPeer(req)
+}
+
+func (s *Server) removePeer(req runner.RemoveRequest) runner.DeployResult {
+	s.deployMu.Lock()
+	defer s.deployMu.Unlock()
+	return s.Runner.RemovePeer(req)
 }
 
 func (s *Server) tryAcquire() (func(), bool) {

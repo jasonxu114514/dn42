@@ -8,6 +8,7 @@ def create_schema() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_node_columns()
     _ensure_peer_request_columns()
+    _ensure_indexes()
 
 
 def _ensure_node_columns() -> None:
@@ -55,3 +56,27 @@ def _ensure_peer_request_columns() -> None:
         if name not in columns:
             with engine.begin() as conn:
                 conn.execute(text(f"ALTER TABLE peer_requests ADD COLUMN {name} {ddl}"))
+
+
+def _ensure_indexes() -> None:
+    """Create sort indexes used by admin list views, idempotently."""
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    indexes = {
+        "peer_requests": {
+            "ix_peer_requests_created_at": "created_at",
+            "ix_peer_requests_updated_at": "updated_at",
+        },
+        "lg_queries": {
+            "ix_lg_queries_created_at": "created_at",
+        },
+    }
+    with engine.begin() as conn:
+        for table, table_indexes in indexes.items():
+            if table not in tables:
+                continue
+            columns = {col["name"] for col in inspector.get_columns(table)}
+            existing = {idx["name"] for idx in inspector.get_indexes(table)}
+            for name, column in table_indexes.items():
+                if column in columns and name not in existing:
+                    conn.execute(text(f"CREATE INDEX {name} ON {table} ({column})"))

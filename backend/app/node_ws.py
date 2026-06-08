@@ -6,7 +6,7 @@ import logging
 import secrets
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import RLock
 from typing import Any
 
@@ -21,6 +21,7 @@ from app.peer.validation import normalize_wireguard_key
 logger = logging.getLogger("dn42.autopeer")
 router = APIRouter()
 MAX_STATUS_OUTPUT = 65536
+STATUS_PERSIST_INTERVAL_SECONDS = 60
 
 
 class NodeOfflineError(RuntimeError):
@@ -43,6 +44,9 @@ class NodeRuntime:
     connected_at: datetime | None = None
     last_seen_at: datetime | None = None
     system: dict[str, Any] = field(default_factory=dict)
+    persisted_at: datetime | None = None
+    persisted_system_json: str = ""
+    persisted_public_key: str | None = None
 
 
 class NodeConnection:
@@ -91,6 +95,9 @@ class NodeHub:
             previous.fail_pending(NodeOfflineError(f"Node '{node.name}' reconnected"))
             await previous.close(code=4000, reason="replaced by a newer connection")
         _store_node_status(node.id, system=None, public_key=None)
+        with self._lock:
+            state = self._runtime.setdefault(node.id, NodeRuntime())
+            state.persisted_at = now
         logger.info("Node %s connected over websocket", node.name)
         return connection
 
@@ -197,7 +204,36 @@ class NodeHub:
         public_key: str | None,
     ) -> None:
         if self._mark_online(connection, system):
-            _store_node_status(connection.node.id, system=system, public_key=public_key)
+            self._persist_seen_if_needed(
+                connection.node.id,
+                system=system,
+                public_key=public_key,
+            )
+
+    def _persist_seen_if_needed(
+        self,
+        node_id: str,
+        *,
+        system: dict[str, Any] | None,
+        public_key: str | None,
+    ) -> None:
+        system_json = _system_json(system) if system else ""
+        now = utcnow()
+        with self._lock:
+            state = self._runtime.setdefault(node_id, NodeRuntime())
+            interval_elapsed = (
+                state.persisted_at is None
+                or now - state.persisted_at >= timedelta(seconds=STATUS_PERSIST_INTERVAL_SECONDS)
+            )
+            public_key_changed = public_key is not None and public_key != state.persisted_public_key
+            if not (interval_elapsed or public_key_changed):
+                return
+            state.persisted_at = now
+            if system_json:
+                state.persisted_system_json = system_json
+            if public_key is not None:
+                state.persisted_public_key = public_key
+        _store_node_status(node_id, system=system, public_key=public_key)
 
     def snapshot(self) -> dict[str, NodeRuntime]:
         with self._lock:
@@ -207,6 +243,9 @@ class NodeHub:
                     connected_at=state.connected_at,
                     last_seen_at=state.last_seen_at,
                     system=dict(state.system),
+                    persisted_at=state.persisted_at,
+                    persisted_system_json=state.persisted_system_json,
+                    persisted_public_key=state.persisted_public_key,
                 )
                 for node_id, state in self._runtime.items()
             }
@@ -331,6 +370,12 @@ def _store_node_status(
             except ValueError:
                 logger.warning("Node %s sent an invalid WireGuard public key", node.name)
         db.commit()
+
+
+def _system_json(system: dict[str, Any] | None) -> str:
+    if not system:
+        return ""
+    return json.dumps(system, sort_keys=True, separators=(",", ":"))
 
 
 def _clean_system_status(value: Any) -> dict[str, Any]:

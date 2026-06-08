@@ -1,7 +1,7 @@
-"""Admin panel: view and manage everything — overview dashboard, agents (PoPs), peers, users, and
+"""Admin panel: view and manage everything — overview dashboard, nodes (PoPs), peers, users, and
 the looking-glass audit log. Every route requires an admin user via ``require_admin``.
 
-The page is split per section (``/admin``, ``/admin/agents``, ``/admin/peers``, ``/admin/users``,
+The page is split per section (``/admin``, ``/admin/nodes``, ``/admin/peers``, ``/admin/users``,
 ``/admin/lg-log``) so each query stays small. Browser form errors surface as flash banners +
 redirect; genuine not-found stays a 404 (styled by the global handler).
 """
@@ -13,18 +13,18 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.agent_ws import agent_runtime_context
 from app.auth.service import unbind_telegram
-from app.db.models import Agent, ASNIdentity, LGQuery, PeerRequest, TelegramBinding, User
+from app.db.models import ASNIdentity, LGQuery, Node, PeerRequest, TelegramBinding, User
 from app.db.session import get_db
-from app.lg.client import AgentClient
+from app.lg.client import NodeClient
+from app.node_ws import node_runtime_context
 from app.peer.config import peer_protocol_name, render_operator_config
-from app.peer.deploy import fetch_agent_public_key
+from app.peer.deploy import fetch_node_public_key
 from app.peer.service import (
     create_peer,
     delete_peer,
     deploy_peer_request,
-    find_peer_on_pop,
+    find_peer_on_node,
     update_peer,
 )
 from app.peer.validation import (
@@ -32,14 +32,27 @@ from app.peer.validation import (
     MAX_WIREGUARD_MTU,
     MIN_WIREGUARD_MTU,
     asn_link_local_address,
-    normalize_agent_host,
     normalize_asn_number,
+    normalize_node_host,
+    normalize_optional_ip,
 )
 from app.web.deps import Pagination, flash, render, require_admin, settings
 
 router = APIRouter()
 
 LG_LOG_PER_PAGE = 50
+
+
+def _clean_node_fields(asn: str, dn42_ipv4: str, dn42_ipv6: str) -> tuple[str, str, str]:
+    """Validate/normalise the optional per-node dn42 fields. Raises ValueError on bad input."""
+    asn = asn.strip()
+    if asn:
+        asn = normalize_asn_number(asn)
+    return (
+        asn,
+        normalize_optional_ip(dn42_ipv4, version=4),
+        normalize_optional_ip(dn42_ipv6, version=6),
+    )
 
 
 # --------------------------------------------------------------------------- pages (GET)
@@ -57,13 +70,13 @@ def admin_overview(
             query = query.filter(f)
         return query.scalar() or 0
 
-    agents_for_runtime = db.query(Agent).order_by(Agent.name).all()
-    runtime = agent_runtime_context(agents_for_runtime)
-    agents_online = sum(1 for item in runtime.values() if item["online"])
+    nodes_for_runtime = db.query(Node).order_by(Node.name).all()
+    runtime = node_runtime_context(nodes_for_runtime)
+    nodes_online = sum(1 for item in runtime.values() if item["online"])
     stats = {
-        "agents_total": count(Agent),
-        "agents_enabled": count(Agent, Agent.enabled.is_(True)),
-        "agents_online": agents_online,
+        "nodes_total": count(Node),
+        "nodes_enabled": count(Node, Node.enabled.is_(True)),
+        "nodes_online": nodes_online,
         "peers_total": count(PeerRequest),
         "peers_deployed": count(PeerRequest, PeerRequest.deploy_status == "deployed"),
         "peers_failed": count(PeerRequest, PeerRequest.deploy_status == "failed"),
@@ -73,7 +86,7 @@ def admin_overview(
     }
     failed_peers = (
         db.query(PeerRequest)
-        .options(joinedload(PeerRequest.agent))
+        .options(joinedload(PeerRequest.node))
         .filter(PeerRequest.deploy_status == "failed")
         .order_by(PeerRequest.updated_at.desc())
         .limit(10)
@@ -81,14 +94,14 @@ def admin_overview(
     )
     recent_peers = (
         db.query(PeerRequest)
-        .options(joinedload(PeerRequest.agent))
+        .options(joinedload(PeerRequest.node))
         .order_by(PeerRequest.created_at.desc())
         .limit(6)
         .all()
     )
     recent_queries = (
         db.query(LGQuery)
-        .options(joinedload(LGQuery.agent), joinedload(LGQuery.user))
+        .options(joinedload(LGQuery.node), joinedload(LGQuery.user))
         .order_by(LGQuery.created_at.desc())
         .limit(8)
         .all()
@@ -107,37 +120,37 @@ def admin_overview(
     )
 
 
-@router.get("/admin/agents", response_class=HTMLResponse)
-def admin_agents(
+@router.get("/admin/nodes", response_class=HTMLResponse)
+def admin_nodes(
     request: Request,
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    agents = db.query(Agent).order_by(Agent.name).all()
+    nodes = db.query(Node).order_by(Node.name).all()
     return render(
         request,
-        "admin/agents.html",
-        {"agents": agents, "agent_runtime": agent_runtime_context(agents)},
+        "admin/nodes.html",
+        {"nodes": nodes, "node_runtime": node_runtime_context(nodes)},
         user=user,
         active="admin",
     )
 
 
-@router.get("/admin/agents/{agent_id}/edit", response_class=HTMLResponse)
-def admin_agent_edit(
-    agent_id: int,
+@router.get("/admin/nodes/{node_id}/edit", response_class=HTMLResponse)
+def admin_node_edit(
+    node_id: str,
     request: Request,
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
-    if agent is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    runtime = agent_runtime_context([agent])[agent.id]
+    node = db.query(Node).filter(Node.id == node_id).one_or_none()
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    runtime = node_runtime_context([node])[node.id]
     return render(
         request,
-        "admin/agent_edit.html",
-        {"agent": agent, "runtime": runtime},
+        "admin/node_edit.html",
+        {"node": node, "runtime": runtime},
         user=user,
         active="admin",
     )
@@ -149,15 +162,15 @@ def admin_peers(
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    agents = db.query(Agent).order_by(Agent.name).all()
+    nodes = db.query(Node).order_by(Node.name).all()
     try:
         default_local_link_address = asn_link_local_address(settings.local_asn)
     except ValueError:
         default_local_link_address = ""
-    # joinedload the agent so the per-row peer.agent access does not lazy-load (N+1).
+    # joinedload the node so the per-row peer.node access does not lazy-load (N+1).
     peers = (
         db.query(PeerRequest)
-        .options(joinedload(PeerRequest.agent))
+        .options(joinedload(PeerRequest.node))
         .order_by(PeerRequest.created_at.desc())
         .all()
     )
@@ -165,7 +178,7 @@ def admin_peers(
         request,
         "admin/peers.html",
         {
-            "agents": agents,
+            "nodes": nodes,
             "peers": peers,
             "default_local_link_address": default_local_link_address,
             "default_wireguard_mtu": DEFAULT_WIREGUARD_MTU,
@@ -179,26 +192,26 @@ def admin_peers(
 
 @router.get("/admin/peers/{peer_id}/edit", response_class=HTMLResponse)
 def admin_peer_edit(
-    peer_id: int,
+    peer_id: str,
     request: Request,
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     peer = (
         db.query(PeerRequest)
-        .options(joinedload(PeerRequest.agent))
+        .options(joinedload(PeerRequest.node))
         .filter(PeerRequest.id == peer_id)
         .one_or_none()
     )
     if peer is None:
         raise HTTPException(status_code=404, detail="Peer not found")
-    agents = db.query(Agent).order_by(Agent.name).all()
+    nodes = db.query(Node).order_by(Node.name).all()
     return render(
         request,
         "admin/peer_edit.html",
         {
             "peer": peer,
-            "agents": agents,
+            "nodes": nodes,
             "default_wireguard_mtu": DEFAULT_WIREGUARD_MTU,
             "wireguard_mtu_min": MIN_WIREGUARD_MTU,
             "wireguard_mtu_max": MAX_WIREGUARD_MTU,
@@ -246,7 +259,7 @@ def admin_lg_log(
     pg = Pagination(page=page, per_page=LG_LOG_PER_PAGE, total=total)
     queries = (
         db.query(LGQuery)
-        .options(joinedload(LGQuery.agent), joinedload(LGQuery.user))
+        .options(joinedload(LGQuery.node), joinedload(LGQuery.user))
         .order_by(LGQuery.created_at.desc())
         .limit(pg.per_page)
         .offset(pg.offset)
@@ -261,145 +274,159 @@ def admin_lg_log(
     )
 
 
-# --------------------------------------------------------------------------- agents (POST)
+# --------------------------------------------------------------------------- nodes (POST)
 
 
-@router.post("/admin/agents")
-def admin_create_agent(
+@router.post("/admin/nodes")
+def admin_create_node(
     request: Request,
     name: str = Form(...),
     location: str = Form(""),
     url: str = Form(...),
+    asn: str = Form(""),
+    dn42_ipv4: str = Form(""),
+    dn42_ipv6: str = Form(""),
     enabled: str | None = Form(None),
     db: Session = Depends(get_db),
     _admin: User = Depends(require_admin),
 ) -> RedirectResponse:
     name = name.strip()
     if not name:
-        flash(request, "Agent name is required.", "error")
-        return RedirectResponse("/admin/agents", status_code=303)
+        flash(request, "Node name is required.", "error")
+        return RedirectResponse("/admin/nodes", status_code=303)
     try:
-        url = normalize_agent_host(url)
+        url = normalize_node_host(url)
+        asn, dn42_ipv4, dn42_ipv6 = _clean_node_fields(asn, dn42_ipv4, dn42_ipv6)
     except ValueError as exc:
         flash(request, str(exc), "error")
-        return RedirectResponse("/admin/agents", status_code=303)
-    if db.query(Agent).filter(Agent.name == name).one_or_none() is not None:
-        flash(request, f"An agent named '{name}' already exists.", "error")
-        return RedirectResponse("/admin/agents", status_code=303)
-    agent = Agent(
+        return RedirectResponse("/admin/nodes", status_code=303)
+    if db.query(Node).filter(Node.name == name).one_or_none() is not None:
+        flash(request, f"A node named '{name}' already exists.", "error")
+        return RedirectResponse("/admin/nodes", status_code=303)
+    node = Node(
         name=name,
         location=location.strip(),
         url=url,
+        asn=asn,
+        dn42_ipv4=dn42_ipv4,
+        dn42_ipv6=dn42_ipv6,
         token=secrets.token_urlsafe(32),
         enabled=enabled == "on",
     )
-    db.add(agent)
+    db.add(node)
     db.commit()
-    flash(request, f"Agent '{name}' created.", "success")
-    return RedirectResponse("/admin/agents", status_code=303)
+    flash(request, f"Node '{name}' created.", "success")
+    return RedirectResponse("/admin/nodes", status_code=303)
 
 
-@router.post("/admin/agents/{agent_id}/update")
-def admin_update_agent(
-    agent_id: int,
+@router.post("/admin/nodes/{node_id}/update")
+def admin_update_node(
+    node_id: str,
     request: Request,
     name: str = Form(...),
     location: str = Form(""),
     url: str = Form(...),
+    asn: str = Form(""),
+    dn42_ipv4: str = Form(""),
+    dn42_ipv6: str = Form(""),
     enabled: str | None = Form(None),
     db: Session = Depends(get_db),
     _admin: User = Depends(require_admin),
 ) -> RedirectResponse:
-    agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
-    if agent is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    edit_url = f"/admin/agents/{agent_id}/edit"
+    node = db.query(Node).filter(Node.id == node_id).one_or_none()
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    edit_url = f"/admin/nodes/{node_id}/edit"
     name = name.strip()
     if not name:
-        flash(request, "Agent name is required.", "error")
+        flash(request, "Node name is required.", "error")
         return RedirectResponse(edit_url, status_code=303)
     try:
-        url = normalize_agent_host(url)
+        url = normalize_node_host(url)
+        asn, dn42_ipv4, dn42_ipv6 = _clean_node_fields(asn, dn42_ipv4, dn42_ipv6)
     except ValueError as exc:
         flash(request, str(exc), "error")
         return RedirectResponse(edit_url, status_code=303)
-    existing = db.query(Agent).filter(Agent.name == name, Agent.id != agent.id).one_or_none()
+    existing = db.query(Node).filter(Node.name == name, Node.id != node.id).one_or_none()
     if existing is not None:
-        flash(request, f"An agent named '{name}' already exists.", "error")
+        flash(request, f"A node named '{name}' already exists.", "error")
         return RedirectResponse(edit_url, status_code=303)
-    agent.name = name
-    agent.location = location.strip()
-    agent.url = url
-    agent.enabled = enabled == "on"
-    # Re-sync the public key from the (maybe changed) URL; keep the old value if the agent is down.
-    fetched = fetch_agent_public_key(agent)
+    node.name = name
+    node.location = location.strip()
+    node.url = url
+    node.asn = asn
+    node.dn42_ipv4 = dn42_ipv4
+    node.dn42_ipv6 = dn42_ipv6
+    node.enabled = enabled == "on"
+    # Re-sync the public key from the (maybe changed) URL; keep the old value if the node is down.
+    fetched = fetch_node_public_key(node)
     if fetched is not None:
-        agent.wg_public_key = fetched
+        node.wg_public_key = fetched
     db.commit()
-    flash(request, f"Agent '{name}' saved.", "success")
+    flash(request, f"Node '{name}' saved.", "success")
     return RedirectResponse(edit_url, status_code=303)
 
 
-@router.post("/admin/agents/{agent_id}/refresh-pubkey")
-def admin_refresh_agent_pubkey(
-    agent_id: int,
+@router.post("/admin/nodes/{node_id}/refresh-pubkey")
+def admin_refresh_node_pubkey(
+    node_id: str,
     request: Request,
     db: Session = Depends(get_db),
     _admin: User = Depends(require_admin),
 ) -> RedirectResponse:
-    agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
-    if agent is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    key = fetch_agent_public_key(agent)
+    node = db.query(Node).filter(Node.id == node_id).one_or_none()
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    key = fetch_node_public_key(node)
     if key is None:
         flash(
             request,
-            "Could not fetch a WireGuard public key from the agent. Check WSS connectivity, "
-            "agent name/token, and that wireguard_public_key is set in the agent's config, "
+            "Could not fetch a WireGuard public key from the node. Check WSS connectivity, "
+            "node name/token, and that wireguard_public_key is set in the agent's config, "
             "then retry.",
             "error",
         )
-        return RedirectResponse(f"/admin/agents/{agent_id}/edit", status_code=303)
-    agent.wg_public_key = key
+        return RedirectResponse(f"/admin/nodes/{node_id}/edit", status_code=303)
+    node.wg_public_key = key
     db.commit()
-    flash(request, f"Refreshed WireGuard public key for '{agent.name}'.", "success")
-    return RedirectResponse(f"/admin/agents/{agent_id}/edit", status_code=303)
+    flash(request, f"Refreshed WireGuard public key for '{node.name}'.", "success")
+    return RedirectResponse(f"/admin/nodes/{node_id}/edit", status_code=303)
 
 
-@router.post("/admin/agents/{agent_id}/reset-token")
-def admin_reset_agent_token(
-    agent_id: int,
+@router.post("/admin/nodes/{node_id}/reset-token")
+def admin_reset_node_token(
+    node_id: str,
     request: Request,
     db: Session = Depends(get_db),
     _admin: User = Depends(require_admin),
 ) -> RedirectResponse:
-    agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
-    if agent is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    agent.token = secrets.token_urlsafe(32)
+    node = db.query(Node).filter(Node.id == node_id).one_or_none()
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    node.token = secrets.token_urlsafe(32)
     db.commit()
-    flash(request, f"Issued a new API token for '{agent.name}'.", "success")
-    return RedirectResponse(f"/admin/agents/{agent_id}/edit", status_code=303)
+    flash(request, f"Issued a new API token for '{node.name}'.", "success")
+    return RedirectResponse(f"/admin/nodes/{node_id}/edit", status_code=303)
 
 
-@router.post("/admin/agents/{agent_id}/delete")
-def admin_delete_agent(
-    agent_id: int,
+@router.post("/admin/nodes/{node_id}/delete")
+def admin_delete_node(
+    node_id: str,
     request: Request,
     db: Session = Depends(get_db),
     _admin: User = Depends(require_admin),
 ) -> RedirectResponse:
-    agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
-    if agent is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if db.query(PeerRequest).filter(PeerRequest.agent_id == agent.id).first() is not None:
-        flash(request, "Delete or move this PoP's peers before deleting it.", "error")
-        return RedirectResponse("/admin/agents", status_code=303)
-    name = agent.name
-    db.delete(agent)
+    node = db.query(Node).filter(Node.id == node_id).one_or_none()
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    if db.query(PeerRequest).filter(PeerRequest.node_id == node.id).first() is not None:
+        flash(request, "Delete or move this node's peers before deleting it.", "error")
+        return RedirectResponse("/admin/nodes", status_code=303)
+    name = node.name
+    db.delete(node)
     db.commit()
-    flash(request, f"Deleted agent '{name}'.", "success")
-    return RedirectResponse("/admin/agents", status_code=303)
+    flash(request, f"Deleted node '{name}'.", "success")
+    return RedirectResponse("/admin/nodes", status_code=303)
 
 
 # --------------------------------------------------------------------------- peers (POST)
@@ -409,8 +436,8 @@ def admin_delete_agent(
 def admin_create_peer(
     request: Request,
     asn: str = Form(...),
-    agent_id: int = Form(...),
-    endpoint: str = Form(...),
+    node_id: str = Form(...),
+    endpoint: str = Form(""),
     wg_public_key: str = Form(...),
     wg_mtu: str | None = Form(None),
     local_link_address: str = Form(...),
@@ -423,33 +450,29 @@ def admin_create_peer(
     except ValueError as exc:
         flash(request, str(exc), "error")
         return RedirectResponse("/admin/peers", status_code=303)
-    agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
-    if agent is None:
-        flash(request, "Unknown agent.", "error")
+    node = db.query(Node).filter(Node.id == node_id).one_or_none()
+    if node is None:
+        flash(request, "Unknown node.", "error")
         return RedirectResponse("/admin/peers", status_code=303)
-    duplicate = find_peer_on_pop(db, agent.id, asn_number)
+    duplicate = find_peer_on_node(db, node.id, asn_number)
     if duplicate is not None:
-        flash(
-            request,
-            f"AS{asn_number} already has peer #{duplicate.id} on {agent.name}.",
-            "error",
-        )
+        flash(request, f"AS{asn_number} already has a peer on {node.name}.", "error")
         return RedirectResponse("/admin/peers", status_code=303)
-    user = db.query(User).filter(User.primary_asn == asn_number).one_or_none()
-    if user is None:
+    peer_user = db.query(User).filter(User.primary_asn == asn_number).one_or_none()
+    if peer_user is None:
         try:
             is_admin = asn_number == normalize_asn_number(settings.local_asn)
         except ValueError:
             is_admin = False
-        user = User(primary_asn=asn_number, is_admin=is_admin)
-        db.add(user)
+        peer_user = User(primary_asn=asn_number, is_admin=is_admin)
+        db.add(peer_user)
         db.flush()
-        db.add(ASNIdentity(user_id=user.id, asn=asn_number, authtype="admin-manual"))
+        db.add(ASNIdentity(user_id=peer_user.id, asn=asn_number, authtype="admin-manual"))
     try:
         peer = create_peer(
             db,
-            user=user,
-            agent=agent,
+            user=peer_user,
+            node=node,
             endpoint=endpoint,
             wg_public_key=wg_public_key,
             wg_mtu=wg_mtu,
@@ -462,12 +485,11 @@ def admin_create_peer(
         return RedirectResponse("/admin/peers", status_code=303)
     db.commit()
     if peer.deploy_status == "deployed":
-        flash(request, f"Peer #{peer.id} for AS{asn_number} created and deployed.", "success")
+        flash(request, f"Peer for AS{asn_number} on {node.name} created and deployed.", "success")
     else:
         flash(
             request,
-            f"Peer #{peer.id} for AS{asn_number} created, deploy failed: "
-            f"{peer.deploy_output[:200]}",
+            f"Peer for AS{asn_number} created, deploy failed: {peer.deploy_output[:200]}",
             "error",
         )
     return RedirectResponse("/admin/peers", status_code=303)
@@ -475,10 +497,10 @@ def admin_create_peer(
 
 @router.post("/admin/peers/{peer_id}/update")
 def admin_update_peer(
-    peer_id: int,
+    peer_id: str,
     request: Request,
-    agent_id: int = Form(...),
-    endpoint: str = Form(...),
+    node_id: str = Form(...),
+    endpoint: str = Form(""),
     wg_public_key: str = Form(...),
     wg_mtu: str | None = Form(None),
     local_link_address: str = Form(...),
@@ -491,15 +513,15 @@ def admin_update_peer(
     if peer is None:
         raise HTTPException(status_code=404, detail="Peer not found")
     edit_url = f"/admin/peers/{peer_id}/edit"
-    agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
-    if agent is None:
-        flash(request, "Unknown agent.", "error")
+    node = db.query(Node).filter(Node.id == node_id).one_or_none()
+    if node is None:
+        flash(request, "Unknown node.", "error")
         return RedirectResponse(edit_url, status_code=303)
     try:
         update_peer(
             db,
             peer=peer,
-            agent=agent,
+            node=node,
             endpoint=endpoint,
             wg_public_key=wg_public_key,
             wg_mtu=wg_mtu,
@@ -513,13 +535,13 @@ def admin_update_peer(
         flash(request, str(exc), "error")
         return RedirectResponse(edit_url, status_code=303)
     db.commit()
-    flash(request, f"Peer #{peer.id} saved.", "success")
+    flash(request, "Peer saved.", "success")
     return RedirectResponse(edit_url, status_code=303)
 
 
 @router.post("/admin/peers/{peer_id}/redeploy")
 def admin_redeploy_peer(
-    peer_id: int,
+    peer_id: str,
     request: Request,
     db: Session = Depends(get_db),
     _admin: User = Depends(require_admin),
@@ -534,15 +556,15 @@ def admin_redeploy_peer(
     deploy_peer_request(peer, settings)
     db.commit()
     if peer.deploy_status == "deployed":
-        flash(request, f"Peer #{peer.id} redeployed.", "success")
+        flash(request, "Peer redeployed.", "success")
     else:
-        flash(request, f"Peer #{peer.id} deploy failed: {peer.deploy_output[:200]}", "error")
+        flash(request, f"Peer deploy failed: {peer.deploy_output[:200]}", "error")
     return RedirectResponse(edit_url, status_code=303)
 
 
 @router.post("/admin/peers/{peer_id}/delete")
 def admin_delete_peer(
-    peer_id: int,
+    peer_id: str,
     request: Request,
     db: Session = Depends(get_db),
     _admin: User = Depends(require_admin),
@@ -552,28 +574,33 @@ def admin_delete_peer(
         raise HTTPException(status_code=404, detail="Peer not found")
     delete_peer(db, peer=peer)
     db.commit()
-    flash(request, f"Deleted peer #{peer_id}.", "success")
+    flash(request, "Deleted peer.", "success")
     return RedirectResponse("/admin/peers", status_code=303)
 
 
 @router.get("/admin/peers/{peer_id}/config", response_class=HTMLResponse)
 def admin_peer_config(
-    peer_id: int,
+    peer_id: str,
     request: Request,
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    peer = db.query(PeerRequest).filter(PeerRequest.id == peer_id).one_or_none()
+    peer = (
+        db.query(PeerRequest)
+        .options(joinedload(PeerRequest.node))
+        .filter(PeerRequest.id == peer_id)
+        .one_or_none()
+    )
     if peer is None:
         raise HTTPException(status_code=404, detail="Peer not found")
     return render(
         request,
         "config.html",
         {
-            "title": f"Operator config for peer #{peer.id}",
-            "subtitle": f"WireGuard + BIRD snippets for AS{peer.asn} on {peer.agent.name}.",
-            "config": render_operator_config(peer, peer.agent, settings.local_asn or "<our-asn>"),
-            "back_url": "/admin/peers",
+            "title": f"Operator config for AS{peer.asn}",
+            "subtitle": f"WireGuard + BIRD snippets for AS{peer.asn} on {peer.node.name}.",
+            "config": render_operator_config(peer, peer.node, settings.local_asn or "<our-asn>"),
+            "back_url": f"/admin/peers/{peer.id}/edit",
         },
         user=user,
         active="admin",
@@ -582,40 +609,40 @@ def admin_peer_config(
 
 @router.get("/admin/peers/{peer_id}/status", response_class=HTMLResponse)
 async def admin_peer_status(
-    peer_id: int,
+    peer_id: str,
     request: Request,
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    """Show one peer's full live WireGuard + BIRD status, fetched from its PoP agent.
+    """Show one peer's full live WireGuard + BIRD status, fetched from its node agent.
 
-    The complete, unmodified command output — the bot's ``/listpeers`` shows only key info. A dead
-    or disabled agent renders a notice instead of failing the page.
+    The complete, unmodified command output — the portal/bot views condense it to key info. A dead
+    or disabled node renders a notice instead of failing the page.
     """
     peer = (
         db.query(PeerRequest)
-        .options(joinedload(PeerRequest.agent))
+        .options(joinedload(PeerRequest.node))
         .filter(PeerRequest.id == peer_id)
         .one_or_none()
     )
     if peer is None:
         raise HTTPException(status_code=404, detail="Peer not found")
-    agent = peer.agent
-    protocol_name = peer_protocol_name(peer, agent)
+    node = peer.node
+    protocol_name = peer_protocol_name(peer, node)
     bird = wg = ""
     error = None
     try:
-        result = await AgentClient().peer_status(agent, protocol_name)
+        result = await NodeClient().peer_status(node, protocol_name)
         bird = str(result.get("output", "")).strip()
         wg = str(result.get("wireguard", "")).strip()
-    except Exception as exc:  # noqa: BLE001 - surface agent errors as a notice, never a 500
-        error = f"Could not fetch live status from {agent.name}: {exc}"
+    except Exception as exc:  # noqa: BLE001 - surface node errors as a notice, never a 500
+        error = f"Could not fetch live status from {node.name}: {exc}"
     return render(
         request,
         "admin/peer_status.html",
         {
             "peer": peer,
-            "agent": agent,
+            "node": node,
             "protocol_name": protocol_name,
             "bird": bird,
             "wg": wg,

@@ -2,7 +2,7 @@
 
 Holds the process-wide configured objects (settings, Jinja templates, the looking-glass rate
 limiter) and the small helpers every router needs: ``render`` for template responses,
-``query_enabled_agents`` for the common agent query, ``client_ip`` for rate-limit identity, the
+``query_enabled_nodes`` for the common node query, ``client_ip`` for rate-limit identity, the
 ``flash`` one-shot session messages, the ``Pagination`` helper, and the ``require_admin`` FastAPI
 dependency that replaces the repeated admin-auth checks.
 """
@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.session import current_user
 from app.config import get_settings
-from app.db.models import Agent, User
+from app.db.models import Node, User
 from app.db.session import get_db
 from app.lg.ratelimit import SlidingWindowRateLimiter
 
@@ -65,9 +65,9 @@ def render(
     return templates.TemplateResponse(request=request, name=name, context=base)
 
 
-def query_enabled_agents(db: Session):
-    """Query of enabled agents ordered by name. Returns the query so callers can refine it."""
-    return db.query(Agent).filter(Agent.enabled.is_(True)).order_by(Agent.name)
+def query_enabled_nodes(db: Session):
+    """Query of enabled nodes ordered by name. Returns the query so callers can refine it."""
+    return db.query(Node).filter(Node.enabled.is_(True)).order_by(Node.name)
 
 
 def client_ip(request: Request) -> str:

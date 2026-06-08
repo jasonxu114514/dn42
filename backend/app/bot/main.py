@@ -79,7 +79,7 @@ dp = Dispatcher()
 
 
 class CreatePeer(StatesGroup):
-    agent = State()
+    node = State()
     endpoint = State()
     public_key = State()
     mtu = State()
@@ -128,7 +128,6 @@ HELP_TEXT = (
     "/trace\n"
     "/mtr\n"
     "/route\n"
-    "/status\n"
     "/cancel - Cancel ALL?"
 )
 
@@ -148,8 +147,7 @@ BOT_COMMANDS = [
     BotCommand(command="ping", description="ping someone"),
     BotCommand(command="trace", description="trace someone"),
     BotCommand(command="mtr", description="mtr someone"),
-    BotCommand(command="route", description="show route on router"),
-    BotCommand(command="status", description="show BIRD status on a PoP"),
+    BotCommand(command="route", description="show route on a node"),
     BotCommand(command="cancel", description="cancel all"),
     BotCommand(command="help", description="show this help"),
 ]
@@ -226,11 +224,18 @@ def looks_like_endpoint(value: str) -> bool:
     return bool(sep and host and port.isdigit() and 1 <= int(port) <= 65535)
 
 
-def parse_peer_id(text: str | None) -> int | None:
+def parse_index(text: str | None, count: int) -> int | None:
+    """Parse a 1-based selection index (``2`` or ``#2``), bounded to ``[1, count]``.
+
+    Peers are picked by their position in the listed menu rather than by their UUID, so the user
+    never has to type a long id. 以選單中的序號(而非 UUID)挑選對等,使用者無需輸入冗長的 id。"""
     if not text:
         return None
     cleaned = text.strip().lstrip("#").strip()
-    return int(cleaned) if cleaned.isdigit() else None
+    if not cleaned.isdigit():
+        return None
+    index = int(cleaned)
+    return index if 1 <= index <= count else None
 
 
 def parse_mtu(text: str | None, *, allow_keep: bool = False) -> int | None:
@@ -247,24 +252,27 @@ def peer_mtu(peer: dict) -> int:
 
 
 def peer_list_text(peers: list[dict]) -> str:
-    return "\n".join(
-        f"#{p['id']} {p['agent']} {p['status']} {p['endpoint']} mtu={peer_mtu(p)}"
-        for p in peers
-    )
+    lines = []
+    for i, p in enumerate(peers, 1):
+        endpoint = p.get("endpoint") or "no endpoint"
+        lines.append(f"{i}. {p['node']} · {p['status']} · {endpoint} · mtu={peer_mtu(p)}")
+    return "\n".join(lines)
 
 
-def agent_keyboard(agents: list[dict]) -> ReplyKeyboardMarkup:
-    rows = [[KeyboardButton(text=agent["name"])] for agent in agents]
+def node_keyboard(nodes: list[dict]) -> ReplyKeyboardMarkup:
+    rows = [[KeyboardButton(text=node["name"])] for node in nodes]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
 
 
 def peer_keyboard(peers: list[dict]) -> ReplyKeyboardMarkup:
-    rows = [[KeyboardButton(text=f"#{p['id']}")] for p in peers]
+    # Buttons are the 1-based menu positions (see peer_list_text); the handler maps the picked
+    # index back to the peer's UUID. 按鈕為選單序號,handler 再對應回對等的 UUID。
+    rows = [[KeyboardButton(text=str(i))] for i, _ in enumerate(peers, 1)]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
 
 
-def lg_agent_inline_keyboard(
-    agent_names: list[str], token: str, active: str | None = None
+def lg_node_inline_keyboard(
+    node_names: list[str], token: str, active: str | None = None
 ) -> InlineKeyboardMarkup:
     """Buttons (≤3 per row) for picking the looking-glass PoP; ``active`` gets a • marker.
 
@@ -280,7 +288,7 @@ def lg_agent_inline_keyboard(
             text=f"• {name}" if name == active else name,
             callback_data=f"lg:{token}:{index}",
         )
-        for index, name in enumerate(agent_names)
+        for index, name in enumerate(node_names)
     ]
     rows = [buttons[i : i + 3] for i in range(0, len(buttons), 3)]
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -328,8 +336,7 @@ def peering_info_text(info: dict) -> str:
 async def send_peer_result(message: Message, action: str, result: dict) -> None:
     deploy_status = result.get("deploy_status")
     await message.answer(
-        f"{action} peer #{result.get('id')} on {result.get('agent')} "
-        f"(AS{result.get('asn')}) — deploy: {deploy_status}",
+        f"{action} peer on {result.get('node')} (AS{result.get('asn')}) — deploy: {deploy_status}",
         reply_markup=ReplyKeyboardRemove(),
     )
     # On success show the actionable "our side" parameters; otherwise show the deploy output so the
@@ -346,13 +353,16 @@ async def send_peer_result(message: Message, action: str, result: dict) -> None:
 async def handle_endpoint_step(
     message: Message, state: FSMContext, *, action: str, next_state: State, prompt: str
 ) -> None:
-    """Shared create/edit wizard step: validate a host:port endpoint, store it, advance state."""
+    """Shared create/edit step: validate a host:port endpoint, or 'skip' for none, then advance."""
     if await reject_if_command(message, action):
         return
     endpoint = (message.text or "").strip()
-    if not looks_like_endpoint(endpoint):
+    if endpoint.lower() in {"skip", "none", "-"}:
+        endpoint = ""
+    elif not looks_like_endpoint(endpoint):
         await message.answer(
-            "Endpoint must be host:port (e.g. 198.51.100.7:51820). Try again or /cancel."
+            "Endpoint must be host:port (e.g. 198.51.100.7:51820), or send 'skip'. "
+            "Try again or /cancel."
         )
         return
     await state.update_data(endpoint=endpoint)
@@ -549,7 +559,7 @@ async def peers_cmd(message: Message) -> None:
     blocks = []
     for peer in peers:
         label = " · ".join(filter(None, (peer.get("status"), peer.get("deploy_status"))))
-        lines = [f"=== #{peer['id']} {peer['agent']} (AS{peer['asn']}) [{label}] ==="]
+        lines = [f"=== {peer['node']} (AS{peer['asn']}) [{label}] ==="]
         if peer.get("endpoint"):
             lines.append(f"your endpoint: {peer['endpoint']}")
         if peer.get("peering"):
@@ -569,9 +579,8 @@ async def peers_cmd(message: Message) -> None:
 def parse_lg_target(message: Message) -> str:
     """Pull the single target out of ``/<command> <target>``.
 
-    The PoP/agent is no longer a positional argument — it is chosen from the inline buttons
-    attached to the reply — so any extra tokens are ignored.
-    PoP／agent 不再是位置參數（改由回覆訊息上的內嵌按鈕選擇），因此會忽略多餘的 token。
+    The node is chosen from the inline buttons attached to the reply, not as a positional
+    argument, so any extra tokens are ignored. 節點改由內嵌按鈕選擇,因此會忽略多餘的 token。
     """
     parts = (message.text or "").split()
     if len(parts) < 2:
@@ -580,60 +589,50 @@ def parse_lg_target(message: Message) -> str:
 
 
 def lg_caption(query_type: str, target: str) -> str:
-    """The ``<type> <target>`` heading shown above LG output, or just ``<type>`` when there is no
-    target (``status`` is router-wide and takes none).
-    LG 輸出上方的標題；``status`` 為整台路由器查詢、無目標，故僅顯示指令名稱。
-    """
+    """The ``<type> <target>`` heading shown above looking-glass output."""
     return f"{query_type} {target}".rstrip()
 
 
 async def run_lg(message: Message, state: FSMContext, query_type: str) -> None:
-    """Run the query on a random PoP immediately, then let the user switch PoPs via buttons.
+    """Run the query on a random node immediately, then let the user switch nodes via buttons.
 
-    立即在隨機 PoP 上執行，並附按鈕讓使用者切換 PoP（結果就地以 edit 更新）。
+    立即在隨機節點上執行,並附按鈕讓使用者切換節點(結果就地以 edit 更新)。
     """
-    # `status` is router-wide and takes no target; every other query requires one.
-    # status 為整台路由器的查詢、不需目標；其餘查詢則必須帶目標。
-    if query_type == "status":
-        target = ""
-    else:
-        try:
-            target = parse_lg_target(message)
-        except ValueError as exc:
-            await message.answer(str(exc))
-            return
+    try:
+        target = parse_lg_target(message)
+    except ValueError as exc:
+        await message.answer(str(exc))
+        return
     data = await call_backend(
         message,
-        backend.get("/api/telegram/agents"),
-        error_prefix="Could not load agents",
+        backend.get("/api/telegram/nodes"),
+        error_prefix="Could not load nodes",
     )
     if data is None:
         return
-    names = [agent["name"] for agent in data.get("agents", [])]
+    names = [node["name"] for node in data.get("nodes", [])]
     if not names:
-        await message.answer("No agents are available right now.")
+        await message.answer("No nodes are available right now.")
         return
     # A fresh token per command so a tap only runs against the query it was shown with; a newer
     # /ping|/trace|/route overwrites it, expiring the previous message's buttons (see lg_choose).
-    # 每次指令產生新 token：點擊只會對其所屬查詢生效；較新的 LG 指令會覆蓋它，使舊訊息的按鈕失效。
     token = secrets.token_urlsafe(6)
     await state.update_data(
-        lg_token=token, lg_query_type=query_type, lg_target=target, lg_agents=names
+        lg_token=token, lg_query_type=query_type, lg_target=target, lg_nodes=names
     )
-    # Pick a random PoP and show output right away; the user can switch via the buttons.
-    # 隨機挑一個 PoP 立即顯示輸出；使用者可再用按鈕切換。
-    agent = random.choice(names)
+    # Pick a random node and show output right away; the user can switch via the buttons.
+    node = random.choice(names)
     placeholder = await message.answer(
-        format_block(f"{lg_caption(query_type, target)} @ {agent}\n\nrunning…"),
+        format_block(f"{lg_caption(query_type, target)} @ {node}\n\nrunning…"),
         parse_mode="Markdown",
-        reply_markup=lg_agent_inline_keyboard(names, token, active=agent),
+        reply_markup=lg_node_inline_keyboard(names, token, active=node),
     )
     await render_lg(
         placeholder,
         user_id=message.from_user.id,
         query_type=query_type,
         target=target,
-        agent=agent,
+        node=node,
         names=names,
         token=token,
     )
@@ -645,22 +644,21 @@ async def render_lg(
     user_id: int,
     query_type: str,
     target: str,
-    agent: str,
+    node: str,
     names: list[str],
     token: str,
 ) -> None:
     """Run one looking-glass query and edit ``message`` in place with the labelled output.
 
-    The keyboard is re-attached (``agent`` marked) so the user can keep switching PoPs on the
+    The keyboard is re-attached (``node`` marked) so the user can keep switching nodes on the
     same message; an HTTP error is shown in the block rather than as a separate message.
-    重新附上鍵盤（標記 ``agent``）讓使用者可在同一訊息持續切換 PoP；HTTP 錯誤直接顯示於區塊內。
     """
     try:
         result = await backend.post(
             "/api/telegram/lg",
             {
                 "telegram_user_id": str(user_id),
-                "agent": agent,
+                "node": node,
                 "query_type": query_type,
                 "target": target,
             },
@@ -670,25 +668,24 @@ async def render_lg(
         body = f"Looking glass failed: {detail_of(exc)}"
     except httpx.HTTPError as exc:
         body = f"Looking glass failed: {exc}"
-    text = format_block(f"{lg_caption(query_type, target)} @ {agent}\n\n{body}")
+    text = format_block(f"{lg_caption(query_type, target)} @ {node}\n\n{body}")
     try:
         await message.edit_text(
             text,
             parse_mode="Markdown",
-            reply_markup=lg_agent_inline_keyboard(names, token, active=agent),
+            reply_markup=lg_node_inline_keyboard(names, token, active=node),
         )
     except TelegramBadRequest:
-        # e.g. "message is not modified" when the same PoP is tapped twice with identical output.
+        # e.g. "message is not modified" when the same node is tapped twice with identical output.
         pass
 
 
 @dp.callback_query(F.data.startswith("lg:"))
 async def lg_choose(callback: CallbackQuery, state: FSMContext) -> None:
-    """Re-run the query on the tapped PoP and edit the message output in place.
+    """Re-run the query on the tapped node and edit the message output in place.
 
     The FSM token (set in ``run_lg``) keeps stale buttons — and, in a group, taps from anyone
     other than the issuer — from firing, since FSM data is keyed per chat+user.
-    由 FSM token 阻擋過期按鈕；群組中 FSM 以 chat+user 為鍵，故非發起者的點擊亦無效。
     """
     try:
         _, token, index_text = callback.data.split(":", 2)
@@ -700,20 +697,20 @@ async def lg_choose(callback: CallbackQuery, state: FSMContext) -> None:
     if data.get("lg_token") != token:
         await callback.answer("This menu expired — re-run the command.", show_alert=True)
         return
-    names = data.get("lg_agents", [])
+    names = data.get("lg_nodes", [])
     if not 0 <= index < len(names):
         await callback.answer("Invalid selection.")
         return
-    agent = names[index]
+    node = names[index]
     query_type = data["lg_query_type"]
     target = data["lg_target"]
-    await callback.answer(f"Running {query_type} on {agent}…")
+    await callback.answer(f"Running {query_type} on {node}…")
     await render_lg(
         callback.message,
         user_id=callback.from_user.id,
         query_type=query_type,
         target=target,
-        agent=agent,
+        node=node,
         names=names,
         token=token,
     )
@@ -737,11 +734,6 @@ async def mtr_cmd(message: Message, state: FSMContext) -> None:
 @dp.message(Command("route"), default_state)
 async def route_cmd(message: Message, state: FSMContext) -> None:
     await run_lg(message, state, "route")
-
-
-@dp.message(Command("status"), default_state)
-async def status_cmd(message: Message, state: FSMContext) -> None:
-    await run_lg(message, state, "status")
 
 
 # --- Guided peer management ----------------------------------------------------------------
@@ -773,20 +765,18 @@ async def create_cmd(message: Message, state: FSMContext) -> None:
 
     data = await call_backend(
         message,
-        backend.get("/api/telegram/agents"),
-        error_prefix="Could not load agents",
+        backend.get("/api/telegram/nodes"),
+        error_prefix="Could not load nodes",
     )
     if data is None:
         return
-    agents = data.get("agents", [])
-    if not agents:
-        await message.answer("No agents are available right now.")
+    nodes = data.get("nodes", [])
+    if not nodes:
+        await message.answer("No nodes are available right now.")
         return
-    await state.update_data(agents=[agent["name"] for agent in agents])
-    await state.set_state(CreatePeer.agent)
-    await message.answer(
-        "Let's create a peer. Which PoP (agent)?", reply_markup=agent_keyboard(agents)
-    )
+    await state.update_data(nodes=[node["name"] for node in nodes])
+    await state.set_state(CreatePeer.node)
+    await message.answer("Let's create a peer. Which node?", reply_markup=node_keyboard(nodes))
 
 
 @dp.message(Command("edit"))
@@ -829,19 +819,20 @@ async def delete_cmd(message: Message, state: FSMContext) -> None:
 # Create wizard steps
 
 
-@dp.message(CreatePeer.agent)
-async def create_agent_step(message: Message, state: FSMContext) -> None:
+@dp.message(CreatePeer.node)
+async def create_node_step(message: Message, state: FSMContext) -> None:
     if await reject_if_command(message, "create"):
         return
     choice = (message.text or "").strip()
     data = await state.get_data()
-    if choice not in data.get("agents", []):
-        await message.answer("Please pick one of the listed agents, or /cancel.")
+    if choice not in data.get("nodes", []):
+        await message.answer("Please pick one of the listed nodes, or /cancel.")
         return
-    await state.update_data(agent=choice)
+    await state.update_data(node=choice)
     await state.set_state(CreatePeer.endpoint)
     await message.answer(
-        "WireGuard endpoint as host:port (e.g. 198.51.100.7:51820).",
+        "WireGuard endpoint as host:port (e.g. 198.51.100.7:51820), "
+        "or send 'skip' if your side will dial us.",
         reply_markup=ReplyKeyboardRemove(),
     )
 
@@ -889,7 +880,7 @@ async def create_mtu_step(message: Message, state: FSMContext) -> None:
     await state.clear()
     payload = {
         "telegram_user_id": str(message.from_user.id),
-        "agent": data["agent"],
+        "node": data["node"],
         "endpoint": data["endpoint"],
         "wg_public_key": data["wg_public_key"],
         "wg_mtu": mtu,
@@ -912,14 +903,18 @@ async def create_mtu_step(message: Message, state: FSMContext) -> None:
 async def edit_choose_step(message: Message, state: FSMContext) -> None:
     if await reject_if_command(message, "edit"):
         return
-    peer_id = parse_peer_id(message.text)
     data = await state.get_data()
-    if peer_id is None or peer_id not in data.get("peer_ids", []):
-        await message.answer("Please pick one of your listed peers (e.g. #12), or /cancel.")
+    peer_ids = data.get("peer_ids", [])
+    index = parse_index(message.text, len(peer_ids))
+    if index is None:
+        await message.answer("Reply with the number of a listed peer, or /cancel.")
         return
-    await state.update_data(peer_id=peer_id)
+    await state.update_data(peer_id=peer_ids[index - 1])
     await state.set_state(EditPeer.endpoint)
-    await message.answer("New WireGuard endpoint as host:port.", reply_markup=ReplyKeyboardRemove())
+    await message.answer(
+        "New WireGuard endpoint as host:port, or send 'skip' for none.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
 
 
 @dp.message(EditPeer.endpoint)
@@ -987,15 +982,16 @@ async def edit_mtu_step(message: Message, state: FSMContext) -> None:
 async def delete_choose_step(message: Message, state: FSMContext) -> None:
     if await reject_if_command(message, "delete"):
         return
-    peer_id = parse_peer_id(message.text)
     data = await state.get_data()
-    if peer_id is None or peer_id not in data.get("peer_ids", []):
-        await message.answer("Please pick one of your listed peers (e.g. #12), or /cancel.")
+    peer_ids = data.get("peer_ids", [])
+    index = parse_index(message.text, len(peer_ids))
+    if index is None:
+        await message.answer("Reply with the number of a listed peer, or /cancel.")
         return
-    await state.update_data(peer_id=peer_id)
+    await state.update_data(peer_id=peer_ids[index - 1])
     await state.set_state(DeletePeer.confirming)
     await message.answer(
-        f"Delete peer #{peer_id}? This tears down the tunnel and BGP session. "
+        "Delete this peer? This tears down the tunnel and BGP session. "
         "Send 'yes' to confirm, or /cancel.",
         reply_markup=ReplyKeyboardRemove(),
     )
@@ -1021,7 +1017,7 @@ async def delete_confirm_step(message: Message, state: FSMContext) -> None:
     )
     if deleted is None:
         return
-    await message.answer(f"Deleted peer #{peer_id}.")
+    await message.answer("Deleted peer.")
 
 
 async def main() -> None:

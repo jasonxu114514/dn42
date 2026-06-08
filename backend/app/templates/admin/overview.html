@@ -5,7 +5,7 @@
 {{ page_header("Dashboard", "Control plane: " ~ settings.base_url) }}
 
 <div class="stat-grid">
-  {{ stat_card("PoPs online", stats.agents_online, stats.agents_enabled ~ " enabled / " ~ stats.agents_total ~ " total", "accent", "/admin/agents") }}
+  {{ stat_card("Nodes online", stats.nodes_online, stats.nodes_enabled ~ " enabled / " ~ stats.nodes_total ~ " total", "accent", "/admin/nodes") }}
   {{ stat_card("Peerings", stats.peers_total, stats.peers_deployed ~ " deployed", "ok", "/admin/peers") }}
   {{ stat_card("Failed deploys", stats.peers_failed, "need attention" if stats.peers_failed else "all healthy", "bad" if stats.peers_failed else "ok", "/admin/peers") }}
   {{ stat_card("Members", stats.users_total, stats.users_admin ~ " admin", "neutral", "/admin/users") }}
@@ -17,15 +17,15 @@
   <div class="section-title"><h2>Needs attention — failed deploys</h2></div>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Peer</th><th>ASN</th><th>PoP</th><th>Output</th><th></th></tr></thead>
+      <thead><tr><th>Peer</th><th>ASN</th><th>Node</th><th>Output</th><th></th></tr></thead>
       <tbody>
         {% for peer in failed_peers %}
         <tr>
-          <td>#{{ peer.id }}</td>
+          <td class="mono">{{ peer.id[:8] }}…</td>
           <td class="mono">AS{{ peer.asn }}</td>
-          <td>{{ peer.agent.name }}</td>
+          <td>{{ peer.node.name }}</td>
           <td><span class="truncate" title="{{ peer.deploy_output }}">{{ peer.deploy_output or "—" }}</span></td>
-          <td class="nowrap"><a href="/admin/peers">manage →</a></td>
+          <td class="nowrap"><a href="/admin/peers/{{ peer.id }}/edit">manage →</a></td>
         </tr>
         {% endfor %}
       </tbody>
@@ -41,7 +41,7 @@
     <ul class="activity-list">
       {% for peer in recent_peers %}
       <li>
-        <span>#{{ peer.id }} · <span class="mono">AS{{ peer.asn }}</span> @ {{ peer.agent.name }}</span>
+        <span class="mono">AS{{ peer.asn }}</span> @ {{ peer.node.name }}
         <span>{{ deploy_badge(peer.deploy_status) }}</span>
       </li>
       {% endfor %}
@@ -55,7 +55,7 @@
       {% for q in recent_queries %}
       <li>
         <span class="mono truncate" title="{{ q.query_type }} {{ q.target }}">{{ q.query_type }} {{ q.target or "" }}</span>
-        <span>{{ badge("ok", "ok") if q.ok else badge("fail", "bad") }} {{ q.agent.name if q.agent else "?" }}</span>
+        <span>{{ badge("ok", "ok") if q.ok else badge("fail", "bad") }} {{ q.node.name if q.node else "?" }}</span>
       </li>
       {% endfor %}
     </ul>

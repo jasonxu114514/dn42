@@ -13,16 +13,8 @@ reason something is down is never hidden.
 
 import re
 
-# A ``birdc`` table row: name proto table state <Since…> <Info>. The Since/Info tail is captured
-# whole (Since's format is config-dependent) and split by ``_info_after_since``.
-_ROW_RE = re.compile(r"^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s*(.*)$")
-_BIRD_READY_RE = re.compile(r"^BIRD\b.*\bready\.?$")
-# Strip a leading Since column — an absolute ``YYYY-MM-DD HH:MM:SS`` datetime or a single token —
-# leaving the Info text (``Established``, ``Active``, …).
-_SINCE_RE = re.compile(r"^(?:\d{4}-\d{2}-\d{2}\s+[\d:.]+|\S+)\s*(.*)$")
 # A channel's "Routes: X imported, Y filtered, Z exported, W preferred" line.
 _ROUTES_RE = re.compile(r"(\d+)\s+imported.*?(\d+)\s+exported")
-_INFRA_PROTOS = {"Device", "Kernel", "Static", "Direct"}
 
 
 def _capped(text: str, *, max_lines: int = 6, max_chars: int = 400) -> str:
@@ -35,45 +27,6 @@ def _capped(text: str, *, max_lines: int = 6, max_chars: int = 400) -> str:
     if len(lines) > max_lines or len(clipped) > max_chars:
         clipped = clipped[:max_chars].rstrip() + " …"
     return clipped
-
-
-def _info_after_since(rest: str) -> str:
-    """The Info text from a row's ``<Since…> <Info>`` tail (drops the leading Since column)."""
-    match = _SINCE_RE.match(rest.strip())
-    return match.group(1).strip() if match else rest.strip()
-
-
-def summarize_protocols(output: str) -> str:
-    """Summarize ``birdc show protocols`` (the LG ``status`` query) to per-BGP-session state.
-
-    Lists every BGP protocol as ``✓ name Established`` / ``✗ name <state>`` under a count header,
-    and flags any infra protocol (Device/Kernel/Static/Direct) that is not ``up``.
-    """
-    bgp: list[tuple[str, str]] = []  # (name, info)
-    infra_down: list[str] = []
-    for raw in (output or "").splitlines():
-        line = raw.strip()
-        if not line or _BIRD_READY_RE.match(line):
-            continue
-        match = _ROW_RE.match(line)
-        if not match:
-            continue
-        name, proto, _table, state, rest = match.groups()
-        if name == "Name" and proto == "Proto":
-            continue  # column header
-        if proto == "BGP":
-            bgp.append((name, _info_after_since(rest) or state))
-        elif proto in _INFRA_PROTOS and state.lower() != "up":
-            infra_down.append(f"⚠ {name} ({proto}) {state}")
-    if not bgp and not infra_down:
-        return _capped(output)
-    established = sum(1 for _, info in bgp if info.lower().startswith("established"))
-    lines = [f"BGP: {established}/{len(bgp)} established"]
-    for name, info in bgp:
-        mark = "✓" if info.lower().startswith("established") else "✗"
-        lines.append(f"{mark} {name}  {info}")
-    lines.extend(infra_down)
-    return "\n".join(lines)
 
 
 def summarize_peer_bird(output: str) -> str:

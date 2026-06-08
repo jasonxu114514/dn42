@@ -18,12 +18,12 @@ from app.auth.service import (
     upsert_user_from_kioubit,
 )
 from app.config import get_settings
-from app.db.models import Agent, PeerRequest
+from app.db.models import Node, PeerRequest
 from app.db.session import get_db
-from app.lg.client import AgentClient
+from app.lg.client import NodeClient
 from app.lg.summary import summarize_peer_bird, summarize_wireguard
 from app.peer.config import peer_protocol_name, peering_info
-from app.peer.service import create_peer, delete_peer, derive_link_addresses, update_peer
+from app.peer.service import create_peer, delete_peer, derive_peer_link_address, update_peer
 from app.peer.validation import MAX_WIREGUARD_MTU, MIN_WIREGUARD_MTU, normalize_asn_number
 
 router = APIRouter(prefix="/api/telegram", tags=["telegram"])
@@ -55,8 +55,8 @@ class LGRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     telegram_user_id: str = Field(pattern=r"^\d{1,20}$")
-    agent: str = Field(default="local", pattern=r"^[A-Za-z0-9_-]{1,64}$")
-    query_type: Literal["ping", "trace", "mtr", "route", "status"]
+    node: str = Field(default="local", pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    query_type: Literal["ping", "trace", "mtr", "route"]
     target: str = Field(default="", max_length=255)
 
 
@@ -64,8 +64,8 @@ class PeerCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     telegram_user_id: str = Field(pattern=r"^\d{1,20}$")
-    agent: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
-    endpoint: str = Field(min_length=1, max_length=255)
+    node: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    endpoint: str = Field(default="", max_length=255)
     wg_public_key: str = Field(min_length=1, max_length=128)
     wg_mtu: int | None = Field(default=None, ge=MIN_WIREGUARD_MTU, le=MAX_WIREGUARD_MTU)
 
@@ -74,8 +74,8 @@ class PeerEditRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     telegram_user_id: str = Field(pattern=r"^\d{1,20}$")
-    peer_id: int = Field(ge=1)
-    endpoint: str = Field(min_length=1, max_length=255)
+    peer_id: str = Field(min_length=1, max_length=36)
+    endpoint: str = Field(default="", max_length=255)
     wg_public_key: str = Field(min_length=1, max_length=128)
     wg_mtu: int | None = Field(default=None, ge=MIN_WIREGUARD_MTU, le=MAX_WIREGUARD_MTU)
 
@@ -84,7 +84,7 @@ class PeerDeleteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     telegram_user_id: str = Field(pattern=r"^\d{1,20}$")
-    peer_id: int = Field(ge=1)
+    peer_id: str = Field(min_length=1, max_length=36)
 
 
 class PeerStatusRequest(BaseModel):
@@ -250,7 +250,7 @@ def telegram_peer_status(telegram_user_id: str, db: Session = Depends(get_db)) -
         "peers": [
             {
                 "id": peer.id,
-                "agent": peer.agent.name,
+                "node": peer.node.name,
                 "status": peer.status,
                 "endpoint": peer.endpoint,
                 "wg_mtu": peer.wg_mtu,
@@ -266,38 +266,36 @@ async def telegram_lg(payload: LGRequest, db: Session = Depends(get_db)) -> dict
     user = get_user_by_telegram(db, payload.telegram_user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Telegram account is not verified")
-    agent = (
-        db.query(Agent).filter(Agent.name == payload.agent, Agent.enabled.is_(True)).one_or_none()
-    )
-    if agent is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    node = db.query(Node).filter(Node.name == payload.node, Node.enabled.is_(True)).one_or_none()
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
     try:
-        return await AgentClient().query(agent, payload.query_type, payload.target)
+        return await NodeClient().query(node, payload.query_type, payload.target)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/agents", dependencies=[Depends(require_bot_secret)])
-def telegram_agents(db: Session = Depends(get_db)) -> dict[str, Any]:
-    agents = db.query(Agent).filter(Agent.enabled.is_(True)).order_by(Agent.name).all()
-    return {"agents": [{"name": agent.name, "location": agent.location} for agent in agents]}
+@router.get("/nodes", dependencies=[Depends(require_bot_secret)])
+def telegram_nodes(db: Session = Depends(get_db)) -> dict[str, Any]:
+    nodes = db.query(Node).filter(Node.enabled.is_(True)).order_by(Node.name).all()
+    return {"nodes": [{"name": node.name, "location": node.location} for node in nodes]}
 
 
 def _peer_summary(peer: PeerRequest) -> dict[str, Any]:
     return {
         "id": peer.id,
-        "agent": peer.agent.name,
+        "node": peer.node.name,
         "asn": peer.asn,
         "deploy_status": peer.deploy_status,
         "deploy_output": peer.deploy_output,
         "wg_mtu": peer.wg_mtu,
         # The "our side" details the peer needs to configure their end; the bot shows these once
         # the deploy succeeds. 部署成功後 bot 會把這些「我方」參數回給使用者設定對端。
-        "peering": peering_info(peer, peer.agent),
+        "peering": peering_info(peer, peer.node),
     }
 
 
-def _owned_peer(db: Session, telegram_user_id: str, peer_id: int) -> PeerRequest:
+def _owned_peer(db: Session, telegram_user_id: str, peer_id: str) -> PeerRequest:
     user = get_user_by_telegram(db, telegram_user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Telegram account is not verified")
@@ -315,23 +313,18 @@ def telegram_peer_create(
     user = get_user_by_telegram(db, payload.telegram_user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Telegram account is not verified")
-    agent = (
-        db.query(Agent).filter(Agent.name == payload.agent, Agent.enabled.is_(True)).one_or_none()
-    )
-    if agent is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    node = db.query(Node).filter(Node.name == payload.node, Node.enabled.is_(True)).one_or_none()
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
     try:
-        local_link_address, peer_link_address = derive_link_addresses(
-            user.primary_asn, settings.local_asn
-        )
+        peer_link_address = derive_peer_link_address(user.primary_asn)
         peer = create_peer(
             db,
             user=user,
-            agent=agent,
+            node=node,
             endpoint=payload.endpoint,
             wg_public_key=payload.wg_public_key,
             wg_mtu=payload.wg_mtu,
-            local_link_address=local_link_address,
             peer_link_address=peer_link_address,
             settings=settings,
         )
@@ -349,7 +342,7 @@ def telegram_peer_edit(payload: PeerEditRequest, db: Session = Depends(get_db)) 
         update_peer(
             db,
             peer=peer,
-            agent=peer.agent,
+            node=peer.node,
             endpoint=payload.endpoint,
             wg_public_key=payload.wg_public_key,
             wg_mtu=payload.wg_mtu,
@@ -389,43 +382,40 @@ async def telegram_status(
         .all()
     )
 
-    client = AgentClient()
+    client = NodeClient()
 
-    async def fetch(agent: Agent, protocol_name: str) -> dict[str, str]:
-        # One agent round-trip returns both the BIRD protocol detail (``output``) and the
-        # WireGuard tunnel status (``wireguard``); a dead agent degrades to a message without
+    async def fetch(node: Node, protocol_name: str) -> dict[str, str]:
+        # One node round-trip returns both the BIRD protocol detail (``output``) and the
+        # WireGuard tunnel status (``wireguard``); a dead node degrades to a message without
         # failing the batch.
-        # 單次 agent 往返同時回傳 BIRD protocol 細節(``output``)與 WireGuard 隧道狀態
-        # (``wireguard``);agent 失聯時退化為訊息,不使整批失敗。
         try:
-            result = await client.peer_status(agent, protocol_name)
+            result = await client.peer_status(node, protocol_name)
             return {
                 "detail": summarize_peer_bird(str(result.get("output", ""))),
                 "wg_detail": summarize_wireguard(str(result.get("wireguard", ""))),
             }
-        except Exception as exc:  # noqa: BLE001 - one dead agent must not fail the batch
+        except Exception as exc:  # noqa: BLE001 - one dead node must not fail the batch
             return {"detail": f"status unavailable: {exc}", "wg_detail": ""}
 
-    # Read every ORM field (agent, peering, protocol name) up front so the Session is never touched
+    # Read every ORM field (node, peering, protocol name) up front so the Session is never touched
     # inside the gather below; the per-peer BGP queries then run concurrently over loaded data.
-    # 先一次讀完所有 ORM 欄位,之後 gather 內僅做網路查詢,不再碰 Session。
     snapshots: list[dict[str, Any]] = []
     fetches = []
     for peer in peers:
-        agent = peer.agent
+        node = peer.node
         snapshots.append(
             {
                 "id": peer.id,
-                "agent": agent.name,
+                "node": node.name,
                 "asn": peer.asn,
                 "status": peer.status,
                 "endpoint": peer.endpoint,
                 "wg_mtu": peer.wg_mtu,
                 "deploy_status": peer.deploy_status,
-                "peering": peering_info(peer, agent),
+                "peering": peering_info(peer, node),
             }
         )
-        fetches.append(fetch(agent, peer_protocol_name(peer, agent)))
+        fetches.append(fetch(node, peer_protocol_name(peer, node)))
 
     details = await asyncio.gather(*fetches)
     return {

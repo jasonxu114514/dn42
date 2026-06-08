@@ -1,9 +1,10 @@
 from typing import Any
 
-from app.agent_ws import AgentRequestError, request_agent_sync
 from app.config import Settings
-from app.db.models import Agent, PeerRequest, utcnow
+from app.db.models import Node, PeerRequest, utcnow
+from app.node_ws import NodeRequestError, request_node_sync
 from app.peer.config import (
+    node_effective_asn,
     peer_protocol_name,
     render_bird_peer_config,
     render_wireguard_peer_config,
@@ -15,10 +16,12 @@ class PeerDeployError(Exception):
     pass
 
 
-def build_deploy_payload(peer: PeerRequest, agent: Agent, settings: Settings) -> dict[str, Any]:
-    local_asn = settings.local_asn.strip()
+def build_deploy_payload(peer: PeerRequest, node: Node, settings: Settings) -> dict[str, Any]:
+    local_asn = node_effective_asn(node, settings.local_asn)
     if not local_asn:
-        raise PeerDeployError("LOCAL_ASN is required before peers can be deployed")
+        raise PeerDeployError(
+            "An ASN (the node's ASN or LOCAL_ASN) is required before peers can be deployed"
+        )
     try:
         local_asn = normalize_asn_number(local_asn)
     except ValueError as exc:
@@ -30,45 +33,45 @@ def build_deploy_payload(peer: PeerRequest, agent: Agent, settings: Settings) ->
     return {
         "request_id": peer.id,
         "asn": peer.asn,
-        "agent": agent.name,
-        "protocol_name": peer_protocol_name(peer, agent),
+        "node": node.name,
+        "protocol_name": peer_protocol_name(peer, node),
         "wireguard_config": render_wireguard_peer_config(
             peer,
-            agent,
+            node,
             settings.wireguard_private_key_placeholder,
         ),
-        "bird_config": render_bird_peer_config(peer, agent, local_asn),
+        "bird_config": render_bird_peer_config(peer, node, local_asn),
     }
 
 
 def deploy_peer(
-    peer: PeerRequest, agent: Agent, settings: Settings, timeout: float = 20.0
+    peer: PeerRequest, node: Node, settings: Settings, timeout: float = 20.0
 ) -> dict[str, Any]:
-    if not agent.enabled:
-        raise PeerDeployError("Agent is disabled")
-    payload = build_deploy_payload(peer, agent, settings)
-    return request_agent_sync(agent, "peers.deploy", payload, timeout)
+    if not node.enabled:
+        raise PeerDeployError("Node is disabled")
+    payload = build_deploy_payload(peer, node, settings)
+    return request_node_sync(node, "peers.deploy", payload, timeout)
 
 
-def remove_peer(peer: PeerRequest, agent: Agent, timeout: float = 20.0) -> dict[str, Any]:
-    """Ask the agent to tear down a peer: bring the tunnel down and delete its config files."""
+def remove_peer(peer: PeerRequest, node: Node, timeout: float = 20.0) -> dict[str, Any]:
+    """Ask the node to tear down a peer: bring the tunnel down and delete its config files."""
     payload = {
         "request_id": peer.id,
-        "protocol_name": peer_protocol_name(peer, agent),
+        "protocol_name": peer_protocol_name(peer, node),
     }
-    return request_agent_sync(agent, "peers.remove", payload, timeout)
+    return request_node_sync(node, "peers.remove", payload, timeout)
 
 
-def fetch_agent_public_key(agent: Agent, timeout: float = 10.0) -> str | None:
-    """Fetch and validate the agent's own WireGuard public key through its WSS ``pubkey`` command.
+def fetch_node_public_key(node: Node, timeout: float = 10.0) -> str | None:
+    """Fetch and validate the node's own WireGuard public key through its WSS ``pubkey`` command.
 
-    Returns the normalized 44-char key, or ``None`` when the agent is unreachable/errors or returns
+    Returns the normalized 44-char key, or ``None`` when the node is unreachable/errors or returns
     a value that is not a well-formed WireGuard key. Callers treat ``None`` as "leave the cached key
     unchanged" so a transient outage never wipes a previously fetched key.
     """
     try:
-        data = request_agent_sync(agent, "pubkey", {}, timeout)
-    except (AgentRequestError, RuntimeError, ValueError):
+        data = request_node_sync(node, "pubkey", {}, timeout)
+    except (NodeRequestError, RuntimeError, ValueError):
         return None
     key = data.get("public_key") if isinstance(data, dict) else None
     if not isinstance(key, str):

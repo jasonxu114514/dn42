@@ -2,20 +2,20 @@
 {% from "macros.html" import page_header, badge, pagination %}
 {% block title %}Query log · {{ settings.app_name }}{% endblock %}
 {% block admin %}
-{{ page_header("Query log", "Every query dispatched to a PoP, with its outcome.") }}
+{{ page_header("Query log", "Every query dispatched to a node, with its outcome.") }}
 <div class="card">
   {% if queries %}
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Time (UTC)</th><th>Requester</th><th>PoP</th><th>Type</th><th>Target</th><th>Result</th><th>Output</th></tr>
+        <tr><th>Time (UTC)</th><th>Requester</th><th>Node</th><th>Type</th><th>Target</th><th>Result</th><th>Output</th></tr>
       </thead>
       <tbody>
         {% for q in queries %}
         <tr>
           <td class="faint nowrap">{{ q.created_at.strftime("%Y-%m-%d %H:%M") if q.created_at else "—" }}</td>
           <td class="mono nowrap">{% if q.user %}AS{{ q.user.primary_asn }}{% else %}<span class="faint">public</span>{% endif %}</td>
-          <td>{{ q.agent.name if q.agent else "—" }}</td>
+          <td>{{ q.node.name if q.node else "—" }}</td>
           <td class="mono">{{ q.query_type }}</td>
           <td class="mono">{{ q.target or "—" }}</td>
           <td>{{ badge("ok", "ok") if q.ok else badge("fail", "bad") }}</td>

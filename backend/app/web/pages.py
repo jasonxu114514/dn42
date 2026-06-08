@@ -4,26 +4,26 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
-from app.agent_ws import agent_runtime_context
 from app.auth.kioubit import KioubitAuthError, KioubitVerifier
 from app.auth.service import consume_challenge, create_challenge, upsert_user_from_kioubit
 from app.auth.session import current_user, login_user, logout_user
 from app.db.session import get_db
-from app.web.deps import query_enabled_agents, render, settings
+from app.node_ws import node_runtime_context
+from app.web.deps import query_enabled_nodes, render, settings
 
 router = APIRouter()
 
 
 @router.get("/", response_class=HTMLResponse)
 def home(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
-    """Landing page: introduce the network and show the live status of every enabled PoP."""
-    agents = query_enabled_agents(db).all()
-    runtime = agent_runtime_context(agents)
-    agents_online = sum(1 for item in runtime.values() if item["online"])
+    """Landing page: intro, a peering guide, and the live status of every enabled node."""
+    nodes = query_enabled_nodes(db).all()
+    runtime = node_runtime_context(nodes)
+    nodes_online = sum(1 for item in runtime.values() if item["online"])
     return render(
         request,
         "home.html",
-        {"agents": agents, "agent_runtime": runtime, "agents_online": agents_online},
+        {"nodes": nodes, "node_runtime": runtime, "nodes_online": nodes_online},
         user=current_user(request, db),
         active="home",
     )

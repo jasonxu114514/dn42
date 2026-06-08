@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 {% from "macros.html" import page_header, code_block %}
-{% block title %}Peer #{{ peer.id }} live status · {{ settings.app_name }}{% endblock %}
+{% block title %}Peer {{ peer.id[:8] }} live status · {{ settings.app_name }}{% endblock %}
 {% block content %}
 <div class="card">
-  {{ page_header("Peer #" ~ peer.id ~ " · AS" ~ peer.asn ~ " live status",
-                 "WireGuard + BIRD status on " ~ agent.name ~ " (" ~ protocol_name ~ ").") }}
+  {{ page_header("Peer · AS" ~ peer.asn ~ " live status",
+                 "WireGuard + BIRD status on " ~ node.name ~ " (" ~ protocol_name ~ ").") }}
   {% if error %}
   <pre class="terminal bad">{{ error }}</pre>
   {% else %}

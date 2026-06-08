@@ -2,10 +2,10 @@
 {% from "macros.html" import page_header, status_badge, deploy_badge %}
 {% block title %}Peerings · {{ settings.app_name }}{% endblock %}
 {% block admin %}
-{{ page_header("Peerings", "Create, edit, redeploy, or remove any peer across all PoPs.") }}
+{{ page_header("Peerings", "Create, edit, redeploy, or remove any peer across all nodes.") }}
 <div class="card">
   <h2>Add peer</h2>
-  {% if agents %}
+  {% if nodes %}
   <form id="admin-add-peer-form" method="post" action="/admin/peers" class="form-grid">
     <label class="field">Peer ASN
       <input
@@ -17,19 +17,19 @@
         required
       >
     </label>
-    <label class="field">Agent (PoP)
-      <select name="agent_id" required>
-        {% for agent in agents %}
-          <option value="{{ agent.id }}">
-            {{ agent.name }}
-            {%- if agent.location %} - {{ agent.location }}{% endif -%}
-            {%- if not agent.enabled %} (disabled){% endif -%}
+    <label class="field">Node
+      <select name="node_id" required>
+        {% for node in nodes %}
+          <option value="{{ node.id }}">
+            {{ node.name }}
+            {%- if node.location %} - {{ node.location }}{% endif -%}
+            {%- if not node.enabled %} (disabled){% endif -%}
           </option>
         {% endfor %}
       </select>
     </label>
-    <label class="field">WireGuard endpoint
-      <input name="endpoint" placeholder="host:port" required>
+    <label class="field">WireGuard endpoint <span class="muted">(optional)</span>
+      <input name="endpoint" placeholder="host:port (blank = peer dials us)">
     </label>
     <label class="field">WireGuard public key
       <input name="wg_public_key" placeholder="44-char base64 key" required>
@@ -49,7 +49,7 @@
       <input
         name="local_link_address"
         value="{{ default_local_link_address }}"
-        placeholder="fe80::1260"
+        placeholder="fe80::1260 or a ULA"
         required
       >
     </label>
@@ -57,14 +57,14 @@
       <input
         id="admin-peer-link-address"
         name="peer_link_address"
-        placeholder="fe80::99"
+        placeholder="fe80::99 or a ULA"
         required
       >
     </label>
     <button type="submit" class="btn-primary">Create peer</button>
   </form>
   {% else %}
-  <div class="empty-state">No PoPs are configured yet. Create an agent first.</div>
+  <div class="empty-state">No nodes are configured yet. Create a node first.</div>
   {% endif %}
 </div>
 
@@ -74,14 +74,14 @@
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>ID</th><th>ASN</th><th>PoP</th><th>Status</th><th>Deploy</th><th></th></tr>
+        <tr><th>Peer</th><th>ASN</th><th>Node</th><th>Status</th><th>Deploy</th><th></th></tr>
       </thead>
       <tbody>
         {% for peer in peers %}
         <tr>
-          <td><a href="/admin/peers/{{ peer.id }}/edit">#{{ peer.id }}</a></td>
+          <td class="mono"><a href="/admin/peers/{{ peer.id }}/edit">{{ peer.id[:8] }}…</a></td>
           <td class="mono nowrap">AS{{ peer.asn }}</td>
-          <td>{{ peer.agent.name }}</td>
+          <td>{{ peer.node.name }}</td>
           <td>{{ status_badge(peer.status) }}</td>
           <td class="nowrap">{{ deploy_badge(peer.deploy_status) }}</td>
           <td class="nowrap"><a class="btn btn-secondary btn-sm" href="/admin/peers/{{ peer.id }}/edit">Manage →</a></td>

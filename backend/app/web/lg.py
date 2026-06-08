@@ -1,4 +1,4 @@
-"""Public looking glass: rate-limited ping/trace/route/status queries dispatched to an agent.
+"""Public looking glass: rate-limited ping/trace/route queries dispatched to a node.
 
 Every query (and its outcome) is logged to the LGQuery table for audit. Browsers submitting the
 form get the full page back; the in-page ``fetch`` (header ``X-Requested-With: fetch``) gets a small
@@ -10,11 +10,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from sqlalchemy.orm import Session
 
 from app.auth.session import current_user
-from app.db.models import Agent, LGQuery
+from app.db.models import LGQuery, Node
 from app.db.session import get_db
-from app.lg.client import AgentClient
+from app.lg.client import NodeClient
 from app.lg.validation import validate_query_type, validate_target
-from app.web.deps import client_ip, lg_rate_limiter, logger, query_enabled_agents, render
+from app.web.deps import client_ip, lg_rate_limiter, logger, query_enabled_nodes, render
 
 router = APIRouter()
 
@@ -22,16 +22,14 @@ router = APIRouter()
 @router.get("/lg", response_class=HTMLResponse)
 def looking_glass_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     """Render the looking-glass query form (the POST handler below runs the query)."""
-    agents = query_enabled_agents(db).all()
-    return render(
-        request, "lg.html", {"agents": agents}, user=current_user(request, db), active="lg"
-    )
+    nodes = query_enabled_nodes(db).all()
+    return render(request, "lg.html", {"nodes": nodes}, user=current_user(request, db), active="lg")
 
 
 @router.post("/lg", response_class=HTMLResponse)
 async def looking_glass(
     request: Request,
-    agent_id: int = Form(...),
+    node_id: str = Form(...),
     query_type: str = Form(...),
     target: str = Form(""),
     db: Session = Depends(get_db),
@@ -41,9 +39,9 @@ async def looking_glass(
             status_code=429,
             detail="Too many looking glass queries. Please wait a moment and try again.",
         )
-    agent = query_enabled_agents(db).filter(Agent.id == agent_id).one_or_none()
-    if agent is None:
-        raise HTTPException(status_code=400, detail="Unknown or disabled agent")
+    node = query_enabled_nodes(db).filter(Node.id == node_id).one_or_none()
+    if node is None:
+        raise HTTPException(status_code=400, detail="Unknown or disabled node")
     result_text = ""
     ok = False
     normalized_query_type = query_type
@@ -55,24 +53,24 @@ async def looking_glass(
         result_text = str(exc)
     else:
         try:
-            result = await AgentClient().query(agent, normalized_query_type, normalized_target)
+            result = await NodeClient().query(node, normalized_query_type, normalized_target)
             ok = bool(result.get("ok", False))
             result_text = str(result.get("output", result))
         except ValueError as exc:
             result_text = str(exc)
         except Exception as exc:
             logger.warning(
-                "Looking glass query failed (agent=%s, type=%s): %s",
-                agent.name,
+                "Looking glass query failed (node=%s, type=%s): %s",
+                node.name,
                 normalized_query_type,
                 exc,
             )
-            result_text = "Query failed: could not reach the looking glass agent."
+            result_text = "Query failed: could not reach the looking glass node."
     user = current_user(request, db)
     db.add(
         LGQuery(
             user_id=user.id if user else None,
-            agent_id=agent.id,
+            node_id=node.id,
             query_type=normalized_query_type,
             target=normalized_target,
             ok=ok,
@@ -85,12 +83,12 @@ async def looking_glass(
     if request.headers.get("x-requested-with", "").lower() == "fetch":
         return JSONResponse({"ok": ok, "output": result_text, "query_type": normalized_query_type})
 
-    agents = query_enabled_agents(db).all()
+    nodes = query_enabled_nodes(db).all()
     return render(
         request,
         "lg.html",
         {
-            "agents": agents,
+            "nodes": nodes,
             "lg_result": result_text,
             "lg_ok": ok,
             "last_query": normalized_query_type,

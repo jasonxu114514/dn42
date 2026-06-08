@@ -6,33 +6,43 @@
   <h1>{{ settings.app_name }}</h1>
   {% if settings.local_asn %}<p class="hero-asn mono">AS{{ settings.local_asn }}</p>{% endif %}
   <p class="muted hero-tagline">
-    Automated dn42 peering and a public looking glass across our points of presence.
-    Bring your ASN, pick a PoP, and get a ready-to-use WireGuard + BGP config.
+    Automated dn42 peering and a public looking glass across our nodes.
+    Bring your ASN, pick a node, and get a ready-to-use WireGuard + BGP config.
   </p>
   <div class="hero-actions">
     <a class="btn btn-primary" href="/lg">Open Looking Glass</a>
     {% if user %}
-      <a class="btn btn-secondary" href="/portal">Your peerings</a>
+      <a class="btn btn-secondary" href="/portal/new">Create a peer</a>
     {% else %}
       <a class="btn btn-secondary" href="/login">Peer with us</a>
     {% endif %}
   </div>
 </section>
 
-<div class="section-title">
-  <h2>Points of presence</h2>
-  <span class="muted">{{ agents_online }} / {{ agents | length }} online</span>
+<div class="card">
+  <div class="section-title"><h2>How to peer with us</h2></div>
+  <ol class="guide-steps">
+    <li><strong>Log in</strong> with your dn42 ASN (Kioubit, or the Telegram bot).</li>
+    <li>Open <a href="/portal/new">New Peer</a>, pick a node, and paste your <strong>WireGuard public key</strong>. Your endpoint is optional — leave it blank and your side dials us.</li>
+    <li>Choose your in-tunnel IP. The <strong>link-local</strong> default works out of the box; a <strong>ULA</strong> (fd00::/8) is also accepted.</li>
+    <li>We validate and <strong>auto-deploy</strong> to the node. Open the peer to copy our endpoint, public key, and BGP neighbor address — then bring up your side.</li>
+  </ol>
 </div>
 
-{% if agents %}
+<div class="section-title">
+  <h2>Nodes</h2>
+  <span class="muted">{{ nodes_online }} / {{ nodes | length }} online</span>
+</div>
+
+{% if nodes %}
 <div class="pop-grid">
-  {% for agent in agents %}
-  {% set rt = agent_runtime[agent.id] %}
+  {% for node in nodes %}
+  {% set rt = node_runtime[node.id] %}
   <div class="pop-card">
     <div class="pop-card-head">
       <div class="pop-id">
-        <span class="pop-name">{{ agent.name }}</span>
-        {% if agent.location %}<span class="pop-loc">{{ agent.location }}</span>{% endif %}
+        <span class="pop-name">{{ node.name }}</span>
+        {% if node.location %}<span class="pop-loc">{{ node.location }}</span>{% endif %}
       </div>
       <span class="online-state {{ 'is-online' if rt.online else 'is-offline' }}">
         <span class="online-dot" aria-hidden="true"></span>{{ "online" if rt.online else "offline" }}
@@ -57,6 +67,6 @@
   {% endfor %}
 </div>
 {% else %}
-<div class="empty-state">No points of presence are configured yet.</div>
+<div class="empty-state">No nodes are configured yet.</div>
 {% endif %}
 {% endblock %}

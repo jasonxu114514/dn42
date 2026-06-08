@@ -14,7 +14,8 @@
         <a href="/" class="navlink {{ 'active' if active == 'home' else '' }}">Home</a>
         <a href="/lg" class="navlink {{ 'active' if active == 'lg' else '' }}">Looking Glass</a>
         {% if user %}
-          <a href="/portal" class="navlink {{ 'active' if active == 'portal' else '' }}">Portal</a>
+          <a href="/portal" class="navlink {{ 'active' if active == 'portal' else '' }}">My Peers</a>
+          <a href="/portal/new" class="navlink {{ 'active' if active == 'new' else '' }}">New Peer</a>
           {% if user.is_admin %}
             <a href="/admin" class="navlink {{ 'active' if active == 'admin' else '' }}">Admin</a>
           {% endif %}

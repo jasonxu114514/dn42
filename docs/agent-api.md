@@ -31,7 +31,7 @@ Authorization: Bearer <token>
 ```
 
 If `backend_wss_url` is configured as a bare backend `http(s)` URL, the agent converts it to
-`ws(s)` and uses `/api/agents/ws`. The `name` value must match the agent record in Admin > Agents.
+`ws(s)` and uses `/api/agents/ws`. The `name` value must match the node record in Admin > Nodes.
 
 After connecting, the agent sends:
 
@@ -128,8 +128,7 @@ or removed files before a later step failed; callers should surface `output` to 
 
 | Command | Purpose | Concurrency-capped |
 | --- | --- | --- |
-| `status` | `birdc show protocols` | yes |
-| `pubkey` | Return this PoP's WireGuard public key | no |
+| `pubkey` | Return this node's WireGuard public key | no |
 | `lg.ping` | Run ping against a target | yes |
 | `lg.trace` | Run traceroute against a target | yes |
 | `lg.mtr` | Run mtr report mode against a target | yes |
@@ -140,25 +139,6 @@ or removed files before a later step failed; callers should surface `output` to 
 
 Concurrency-capped commands share the `max_concurrency` semaphore. When the semaphore is full, the
 agent returns `{"ok": false, "output": "agent is busy, try again shortly"}` instead of queueing work.
-
-## `status`
-
-Runs:
-
-```text
-birdc show protocols
-```
-
-Example response:
-
-```json
-{
-  "ok": true,
-  "output": "BIRD protocol table..."
-}
-```
-
-This is used by the public looking glass `status` query.
 
 ## `pubkey`
 
@@ -171,7 +151,7 @@ Returns the agent's configured `wireguard_public_key`.
 ```
 
 The agent validates this key during startup and refuses to start if it is missing or malformed. The
-backend stores it on the agent record and includes it in peer-facing generated config.
+backend stores it on the node record and includes it in peer-facing generated config.
 
 ## Looking-Glass Commands
 
@@ -274,9 +254,9 @@ Request:
 
 ```json
 {
-  "request_id": 123,
+  "request_id": "f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
   "asn": "4242420090",
-  "agent": "sin1",
+  "node": "sin1",
   "protocol_name": "DN42_0090",
   "wireguard_config": "# Generated...\n[Interface]\nPrivateKey = {{WIREGUARD_PRIVATE_KEY}}\nListenPort = 20090\nTable = off\nMTU = 1420\nPostUp = ip addr add fe80::1/64 dev %i\n\n[Peer]\nEndpoint = 198.51.100.10:51820\nPersistentKeepalive = 15\nPublicKey = xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx=\nAllowedIPs = 10.0.0.0/8, 172.20.0.0/14, 172.31.0.0/16, fd00::/8, fe80::/64\n",
   "bird_config": "# Generated...\nprotocol bgp DN42_0090 from dnpeers {\n  enable extended messages on;\n  neighbor fe80::90%DN42_0090 as 4242420090;\n  source address fe80::1;\n  direct;\n  ipv4 {\n    extended next hop on;\n  };\n}\n"
@@ -293,9 +273,9 @@ Notes:
 
 Validation:
 
-- `request_id` must be positive.
+- `request_id` is required (non-empty, max 64 chars).
 - `asn` is required, max 32 chars, and must not contain unsafe target characters.
-- `agent` is required, max 64 chars, and must not contain `/` or `\`.
+- `node` is required, max 64 chars, and must not contain `/` or `\`.
 - `protocol_name` must match the safe-name regex above.
 - `wireguard_config` and `bird_config` are required, max 16 KiB each, and must not contain NUL.
 
@@ -337,7 +317,7 @@ Request:
 
 ```json
 {
-  "request_id": 123,
+  "request_id": "f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
   "protocol_name": "DN42_0090"
 }
 ```

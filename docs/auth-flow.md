@@ -284,7 +284,7 @@ Important endpoints:
 | `POST /api/telegram/findnoc/login` | Optional FindNOC login. |
 | `POST /api/telegram/logout` | Remove Telegram binding. |
 | `GET /api/telegram/peer/{telegram_user_id}` | List peers for wizard selection. |
-| `GET /api/telegram/agents` | List enabled agents. |
+| `GET /api/telegram/nodes` | List enabled nodes. |
 | `POST /api/telegram/peer/create` | Create and deploy a peer. |
 | `POST /api/telegram/peer/edit` | Edit and redeploy a peer. |
 | `POST /api/telegram/peer/delete` | Delete a peer. |

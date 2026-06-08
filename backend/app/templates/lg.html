@@ -3,19 +3,19 @@
 {% block title %}Looking Glass · {{ settings.app_name }}{% endblock %}
 {% block content %}
 <div class="card">
-  {{ page_header("Looking Glass", "Run ping, traceroute, mtr, route, and BGP-status queries from any PoP.") }}
-  {% if agents %}
+  {{ page_header("Looking Glass", "Run ping, traceroute, mtr, and route queries from any node.") }}
+  {% if nodes %}
   <form id="lg-form" method="post" action="/lg" class="form-grid">
-    <label class="field">Agent (PoP)
-      <select name="agent_id">
-        {% for agent in agents %}
-          <option value="{{ agent.id }}">{{ agent.name }}{% if agent.location %} — {{ agent.location }}{% endif %}</option>
+    <label class="field">Node
+      <select name="node_id">
+        {% for node in nodes %}
+          <option value="{{ node.id }}">{{ node.name }}{% if node.location %} — {{ node.location }}{% endif %}</option>
         {% endfor %}
       </select>
     </label>
     <label class="field">Query
       <select name="query_type">
-        {% for q in ["ping", "trace", "mtr", "route", "status"] %}
+        {% for q in ["ping", "trace", "mtr", "route"] %}
           <option value="{{ q }}" {% if last_query == q %}selected{% endif %}>{{ "traceroute" if q == "trace" else q }}</option>
         {% endfor %}
       </select>
@@ -30,7 +30,7 @@
     {% if lg_result %}{{ code_block(lg_result, ok=lg_ok) }}{% endif %}
   </div>
   {% else %}
-  <div class="empty-state">No looking-glass PoPs are configured yet.</div>
+  <div class="empty-state">No looking-glass nodes are configured yet.</div>
   {% endif %}
 </div>
 {% endblock %}

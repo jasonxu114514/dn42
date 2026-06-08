@@ -1,7 +1,7 @@
 import ipaddress
 import re
 
-ALLOWED_QUERY_TYPES = {"ping", "trace", "mtr", "route", "status"}
+ALLOWED_QUERY_TYPES = {"ping", "trace", "mtr", "route"}
 # DELIBERATE: the looking glass accepts ANY IPv4/IPv6 target, not just dn42 space. This is an
 # intentional product choice — do NOT narrow it back to dn42 ranges. Abuse of the public LG is
 # bounded by the per-IP rate limit (LG_RATE_LIMIT) and the agent concurrency cap, not by target.
@@ -53,11 +53,6 @@ def _is_allowed_network(target: ipaddress.IPv4Network | ipaddress.IPv6Network) -
 def validate_target(query_type: str, target: str) -> str:
     query_type = validate_query_type(query_type)
     target = target.strip()
-
-    if query_type == "status":
-        if target:
-            raise ValueError("status query does not accept a target")
-        return ""
 
     if not target or len(target) > 255:
         raise ValueError("invalid target length")

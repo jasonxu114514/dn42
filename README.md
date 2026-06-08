@@ -8,14 +8,14 @@ The project has three parts:
 
 - **Backend**: a FastAPI control plane with a server-rendered Web UI, ASN login, peer lifecycle
   management, and the bot-only REST API.
-- **Agent**: a small Go service that runs on each router as root. It executes fixed-argument
+- **Agent**: a small Go service that runs on each node (router) as root. It executes fixed-argument
   looking-glass commands and applies per-peer WireGuard and BIRD config.
 - **Telegram bot**: a guided interface for login, peer create/edit/delete, peer status, and
   looking-glass queries.
 
-Peers prove control of an ASN, choose a PoP, submit their WireGuard endpoint/public key, and receive
-the operator-side parameters they need to configure their tunnel. The backend renders WireGuard and
-BIRD snippets and sends them to the selected router agent.
+Peers prove control of an ASN, choose a node, submit their WireGuard public key (and an optional
+endpoint), and receive the operator-side parameters they need to configure their tunnel. The backend
+renders WireGuard and BIRD snippets and sends them to the selected node's agent.
 
 > [!WARNING]
 > The agent runs as root because it writes router config and calls `wg-quick`. Treat every value that
@@ -46,42 +46,43 @@ Browser                 Telegram bot
 +------------------------------------------------+
 | Backend: FastAPI, SQLite, Web UI, bot API       |
 | - verifies ASN ownership                        |
-| - stores users, agents, peers, sessions         |
+| - stores users, nodes, peers, sessions          |
 | - renders WireGuard and BIRD peer config        |
 +------------------------------------------------+
                          |
                          | Agent-initiated WSS
                          v
 +------------------------------------------------+
-| Agent on each router / PoP                      |
+| Agent on each node (router)                     |
 | - writes /etc/wireguard/*.conf                  |
 | - writes /etc/bird/peers/*.conf                 |
 | - runs wg-quick, birdc, ping, traceroute, mtr   |
 +------------------------------------------------+
 ```
 
-The backend can run on the same host as the bot. Agents usually run on routers, one agent per PoP.
-Each agent keeps a bearer-token WSS connection to the backend; the URL stored in the admin panel is
-the public endpoint host used for generated WireGuard configs.
+The backend can run on the same host as the bot. Agents usually run on routers, one agent per node.
+Each agent keeps a bearer-token WSS connection to the backend; the public address stored in the
+admin panel is the endpoint host used for generated WireGuard configs. Each node carries its own
+dn42 identity (ASN, DN42 IPv4/IPv6); the ASN falls back to `LOCAL_ASN` when left blank.
 
 ## How Peering Works
 
 1. A user logs in and proves control of a dn42 ASN using Kioubit.dn42 or the optional FindNOC
    Telegram quick login.
 2. The user creates a peer in the Web portal or Telegram bot:
-   - selects an enabled PoP;
-   - enters their WireGuard endpoint (`host:port`);
+   - selects an enabled node;
    - enters their WireGuard public key;
-   - chooses a WireGuard MTU, default `1420`;
-   - in the Web UI, optionally overrides the link-local BGP addresses.
-3. The backend validates the values, enforces one peer per ASN per PoP, stores the peer as approved,
-   and renders the WireGuard and BIRD config.
+   - optionally enters their WireGuard endpoint (`host:port`); blank means the peer dials us;
+   - chooses their in-tunnel IP — link-local by default, a ULA (`fd00::/8`) is also accepted;
+   - chooses a WireGuard MTU, default `1420`.
+3. The backend validates the values, enforces one peer per ASN per node, stores the peer as
+   approved, and renders the WireGuard and BIRD config. Our-side address is derived from the node.
 4. The backend sends a `peers.deploy` command over the agent's WSS connection.
 5. The agent writes the config files, runs `wg-quick down` and `wg-quick up`, then runs the optional
    BIRD reload command.
 6. After deployment, the Web UI and bot show the peer the operator-side values:
    - our WireGuard endpoint;
-   - our WireGuard public key for the chosen PoP;
+   - our WireGuard public key for the chosen node;
    - our tunnel IP, used as the peer's BGP neighbor;
    - the WireGuard MTU.
 
@@ -97,8 +98,8 @@ BIRD snippets.
 | Peer link-local address | `fe80::<asn-suffix>` | `fe80::90` |
 | WireGuard MTU | User-editable, default `1420`, range `1280-9000` | `1420` |
 
-The host part of our endpoint is taken from the endpoint URL registered in the admin panel. The
-backend adds the ASN-derived WireGuard listen port.
+The host part of our endpoint is taken from the node's public address registered in the admin panel.
+The backend adds the ASN-derived WireGuard listen port.
 
 Generated WireGuard configs include the MTU in `[Interface]`:
 
@@ -169,10 +170,25 @@ cp config.example.json config.json
 ./agent -config ./config.json
 ```
 
-The backend starts with no agents. Register each PoP in **Admin > Agents**, then copy the PoP name,
+The backend starts with no nodes. Register each node in **Admin > Nodes**, then copy the node name,
 generated token, and backend WSS URL into the matching router's `config.json`. Once connected, the
 agent sends heartbeat/system status, all-server WireGuard/BIRD status, and its configured
 `wireguard_public_key`, which the backend caches and shows to peers.
+
+### Migrating from a previous version
+
+Releases before this one used auto-increment integer IDs and called nodes "agents". Existing
+databases need a one-time migration to UUID node/peer IDs. Stop the backend and run:
+
+```sh
+python3 backend/scripts/migrate_to_uuid_nodes.py            # uses backend/autopeer.db
+python3 backend/scripts/migrate_to_uuid_nodes.py --db /path/to/autopeer.db
+```
+
+It writes a timestamped backup first, then rebuilds the `agents` → `nodes`, `peer_requests`, and
+`lg_queries` tables with UUIDs. Fresh installs do not need it — the backend creates the current
+schema on first startup. The Go agent must also be rebuilt from this release (the deploy protocol
+changed); the WSS path and `config.json` are unchanged, so no per-router config edit is needed.
 
 ## Configuration
 
@@ -207,10 +223,10 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `name` | empty | PoP name matching the backend agent record; required for WSS. |
+| `name` | empty | Node name matching the backend node record; required for WSS. |
 | `token` | empty | Bearer token used for the WSS connection. |
 | `backend_wss_url` | required | Backend websocket URL, usually `wss://example.com/api/agents/ws`. `http(s)` base URLs are accepted and converted to `ws(s)`. |
-| `max_concurrency` | `4` | Concurrent looking-glass/status commands. `0` disables the cap. |
+| `max_concurrency` | `4` | Concurrent looking-glass commands. `0` disables the cap. |
 | `command_timeout_seconds` | `12` | Timeout for each external command. |
 | `birdc_path` | `birdc` | Path to `birdc`. |
 | `ping_path` | `ping` | Path to `ping`. |
@@ -232,17 +248,21 @@ key.
 
 | Route | Purpose |
 | --- | --- |
-| `/` | Public looking glass. |
+| `/` | Home: network intro, a how-to-peer guide, and live node status. |
+| `/lg` | Public looking glass (ping, traceroute, mtr, route). |
 | `/login` | Web Kioubit login. |
-| `/portal` | User portal for creating peers, viewing deployment state, and viewing generated config. |
+| `/portal` | My Peers: overview of your peers. |
+| `/portal/new` | Create a peer. |
+| `/portal/peers/{id}` | Peer detail: ids, our-side parameters, node addressing, live status; delete. |
 | `/admin` | Operator overview. |
-| `/admin/agents` | Register/edit PoPs, refresh pubkeys, reset tokens. |
+| `/admin/nodes` | Register/edit nodes (ASN, DN42 addresses, enable/disable), refresh pubkeys, reset tokens. |
 | `/admin/peers` | Edit, redeploy, disable, delete peers. |
 | `/admin/users` | Manage users and Telegram bindings. |
 | `/admin/lg-log` | Audit log for looking-glass queries. |
 
-The portal lets users set WireGuard MTU during peer creation. The admin peer table also exposes MTU
-so the operator can correct and redeploy a peer.
+Both the New Peer form and the admin peer form let the operator set WireGuard MTU; the admin form
+can also correct addresses and redeploy. Disabled nodes are hidden from the public site and the
+looking glass.
 
 ## Telegram Bot
 
@@ -255,16 +275,16 @@ Commands:
 /create       Guided peer creation
 /edit         Guided peer edit, including MTU
 /delete       Guided peer deletion
-/ping         Run ping from a PoP
-/trace        Run traceroute from a PoP
-/mtr          Run mtr from a PoP
-/route        Run a BIRD route lookup from a PoP
-/status       Run a BIRD status query from a PoP
+/ping         Run ping from a node
+/trace        Run traceroute from a node
+/mtr          Run mtr from a node
+/route        Run a BIRD route lookup from a node
 /cancel       Abort the current guided action
 ```
 
-For `/create`, the bot asks for PoP, endpoint, public key, and MTU. Sending `default` at the MTU
-step uses `1420`. For `/edit`, sending `keep` keeps the current MTU.
+For `/create`, the bot asks for node, endpoint (send `skip` for none), public key, and MTU. Sending
+`default` at the MTU step uses `1420`. For `/edit`, sending `keep` keeps the current MTU. Peers are
+picked from a numbered menu rather than by id.
 
 ## Agent and BIRD
 
@@ -323,9 +343,9 @@ are documented in [docs/auth-flow.md](docs/auth-flow.md).
 | --- | --- |
 | Backend refuses to start with insecure defaults | Set strong `SESSION_SECRET` and `TELEGRAM_BACKEND_SECRET`, or use `--allow-http` for local testing. |
 | Telegram Mini App login does not work | `DOMAIN` must be a public HTTPS URL. |
-| Agent stays offline | Check `name`, `backend_wss_url`, TLS reachability, and that the token matches **Admin > Agents**. |
+| Agent stays offline | Check `name`, `backend_wss_url`, TLS reachability, and that the token matches **Admin > Nodes**. |
 | Agent returns `unauthorized` | Backend agent token and agent `config.json` token do not match. |
-| Peer config shows `<our-wireguard-public-key>` | Connect the agent or refresh the pubkey in **Admin > Agents**, then check `wireguard_public_key`. |
+| Peer config shows `<our-wireguard-public-key>` | Connect the agent or refresh the pubkey in **Admin > Nodes**, then check `wireguard_public_key`. |
 | Deploy fails with missing private key | Set `wireguard_private_key` in the agent config. |
 | Deploy fails with BIRD permission errors | Set `bird_peer_group` to the group used by the BIRD daemon, often `bird`. |
 | BGP session stays down | Check link-local addresses, MTU, allowed routes, BIRD template, and `wg show <interface>`. |
@@ -341,8 +361,10 @@ backend/
   app/db/           SQLAlchemy models and schema bootstrap
   app/lg/           Looking-glass client, validation, rate limit
   app/peer/         Peer validation, config rendering, deploy/remove
+  app/node_ws.py    Node WSS hub (agent connections, live status)
   app/templates/    Jinja templates
   app/static/       CSS and small browser scripts
+  scripts/          One-off maintenance scripts (v1→v2 DB migration)
 agent/
   cmd/agent/        Agent entry point
   internal/api/     Agent HTTP server

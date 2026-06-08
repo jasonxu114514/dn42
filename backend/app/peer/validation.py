@@ -6,26 +6,32 @@
 """
 
 import re
-from ipaddress import IPv6Address, ip_address, ip_interface
+from ipaddress import IPv6Address, IPv6Network, ip_address, ip_interface
 
 _HOSTNAME_RE = re.compile(
     r"(?=.{1,253}\Z)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?"
 )
 _WIREGUARD_KEY_RE = re.compile(r"[A-Za-z0-9+/]{43}=")
+# dn42 BGP runs in-tunnel over an IPv6 link-local (fe80::/10) or a ULA (fc00::/7, which covers
+# fd00::/8). A link-local neighbor needs a %interface scope in BIRD; a ULA does not.
+_ULA_NETWORK = IPv6Network("fc00::/7")
 DEFAULT_WIREGUARD_MTU = 1420
 MIN_WIREGUARD_MTU = 1280
 MAX_WIREGUARD_MTU = 9000
 
 
 def normalize_endpoint(value: str) -> str:
-    """Validate a WireGuard endpoint as ``host:port``.
+    """Validate a WireGuard endpoint as ``host:port``, or return ``""`` when blank.
 
-    Rejects newlines, whitespace, and shell/config metacharacters so the value can never
-    inject extra directives (e.g. ``PostUp``) into the generated wg-quick config.
+    A blank endpoint is allowed: the peer then dials us (we are the listener), so the generated
+    wg-quick config simply omits the ``Endpoint`` line. A non-blank value is validated and may not
+    contain newlines, whitespace, or shell/config metacharacters so it can never inject extra
+    directives (e.g. ``PostUp``) into the config. 端點留空代表由對端撥號連我方,設定檔即省略
+    ``Endpoint`` 行;非空值則嚴格驗證。
     """
     value = value.strip()
     if not value:
-        raise ValueError("Endpoint is required")
+        return ""
     if len(value) > 255:
         raise ValueError("Endpoint is too long")
     for ch in value:
@@ -56,8 +62,8 @@ def normalize_endpoint(value: str) -> str:
     return f"{host}:{port}"
 
 
-def extract_agent_host(value: str) -> str:
-    """Reduce a stored PoP public address to a bare host (drop scheme, path, brackets, and :port).
+def extract_node_host(value: str) -> str:
+    """Reduce a stored Node public address to a bare host (drop scheme, path, brackets, and :port).
 
     Tolerant by design so a legacy URL-form value (``https://pop.example.net``) and the new
     bare-host form both resolve to the host a peer's WireGuard should dial. A bare IPv6 literal is
@@ -74,19 +80,19 @@ def extract_agent_host(value: str) -> str:
     return host
 
 
-def normalize_agent_host(value: str) -> str:
-    """Validate a PoP's public address: a bare IPv4, IPv6, or domain — no scheme, no port.
+def normalize_node_host(value: str) -> str:
+    """Validate a Node's public address: a bare IPv4, IPv6, or domain — no scheme, no port.
 
     Only the host is stored; the WireGuard port a peer dials is derived from its ASN
     (see ``wireguard_listen_port``). A pasted scheme/port is stripped for convenience, and the
-    remainder must be a valid address. 本 PoP 對外位址：純 IPv4 / IPv6 / 網域（不含 scheme 與埠）。
+    remainder must be a valid address. 本節點對外位址：純 IPv4 / IPv6 / 網域（不含 scheme 與埠）。
     """
     raw = value.strip()
     if not raw:
-        raise ValueError("PoP public address is required")
+        raise ValueError("Node public address is required")
     if len(raw) > 255:
-        raise ValueError("PoP public address is too long")
-    host = extract_agent_host(raw)
+        raise ValueError("Node public address is too long")
+    host = extract_node_host(raw)
     if host:
         try:
             ip_address(host)  # accepts both IPv4 and IPv6 literals
@@ -95,7 +101,7 @@ def normalize_agent_host(value: str) -> str:
             pass
         if _HOSTNAME_RE.fullmatch(host):
             return host
-    raise ValueError("PoP public address must be an IPv4, IPv6, or domain name (no scheme or port)")
+    raise ValueError("Node public address must be an IPv4, IPv6, or domain (no scheme or port)")
 
 
 def normalize_wireguard_key(value: str) -> str:
@@ -103,6 +109,23 @@ def normalize_wireguard_key(value: str) -> str:
     value = value.strip()
     if not _WIREGUARD_KEY_RE.fullmatch(value):
         raise ValueError("WireGuard public key must be a 44-character base64 value")
+    return value
+
+
+def normalize_optional_ip(value: str, *, version: int) -> str:
+    """Validate an optional IPv4/IPv6 address or CIDR (blank allowed); return the trimmed value.
+
+    Used for the per-node DN42 IPv4/IPv6 fields, which are informational (shown to peers) and may
+    be left empty. 用於每節點 DN42 IPv4/IPv6 欄位(可留空,僅供顯示)。"""
+    value = (value or "").strip()
+    if not value:
+        return ""
+    try:
+        interface = ip_interface(value)
+    except ValueError as exc:
+        raise ValueError(f"Must be a valid IPv{version} address") from exc
+    if interface.version != version:
+        raise ValueError(f"Must be an IPv{version} address")
     return value
 
 
@@ -140,17 +163,38 @@ def asn_link_local_address(asn: str) -> str:
     return address
 
 
-def normalize_link_local_address(value: str) -> str:
+def is_link_local(value: str) -> bool:
+    """True when ``value`` (a bare IP or IP/prefix) is an IPv6 link-local (fe80::/10) address.
+
+    BIRD needs a ``%interface`` scope on a link-local neighbor/source address but not on a ULA,
+    so config generation branches on this. 判斷是否為 IPv6 link-local;link-local 的 BIRD
+    neighbor/source 需加 %介面 scope,ULA 則否。"""
+    try:
+        ip = ip_interface(value.strip()).ip
+    except ValueError:
+        return False
+    return isinstance(ip, IPv6Address) and ip.is_link_local
+
+
+def normalize_tunnel_address(value: str) -> str:
+    """Validate a peer's in-tunnel BGP address: an IPv6 link-local (fe80::/10) or ULA (fc00::/7).
+
+    dn42 peerings run BGP over either the WireGuard link-local (the default) or a ULA; both are
+    accepted. Returns the bare address, dropping any ``/prefix``. 對等隧道內的 BGP 位址:
+    IPv6 link-local(預設)或 ULA,皆接受;回傳去除前綴的純位址。
+    """
     value = value.strip()
     if not value:
         raise ValueError("Peer address is required")
     try:
-        interface = ip_interface(value)
+        ip = ip_interface(value).ip
     except ValueError as exc:
-        raise ValueError("Peer address must be an IPv6 link-local address") from exc
-    if not isinstance(interface.ip, IPv6Address) or not interface.ip.is_link_local:
-        raise ValueError("Peer address must be an IPv6 link-local address")
-    return str(interface.ip)
+        raise ValueError("Peer address must be an IPv6 link-local or ULA address") from exc
+    if not isinstance(ip, IPv6Address) or not (ip.is_link_local or ip in _ULA_NETWORK):
+        raise ValueError(
+            "Peer address must be an IPv6 link-local (fe80::/10) or ULA (fd00::/8) address"
+        )
+    return str(ip)
 
 
 def wireguard_listen_port(asn: str) -> int:

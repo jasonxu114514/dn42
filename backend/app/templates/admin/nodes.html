@@ -1,49 +1,52 @@
 {% extends "admin/layout.html" %}
 {% from "macros.html" import page_header, bool_pill %}
-{% block title %}PoPs · {{ settings.app_name }}{% endblock %}
+{% block title %}Nodes · {{ settings.app_name }}{% endblock %}
 {% block admin %}
-{{ page_header("PoPs (agents)", "Agents connect back over WSS and deploy WireGuard + BIRD configs as root.") }}
+{{ page_header("Nodes", "Nodes connect back over WSS and deploy WireGuard + BIRD configs as root.") }}
 
 <div class="card">
-  <h2>Add a PoP</h2>
-  <form method="post" action="/admin/agents" class="form-grid">
+  <h2>Add a node</h2>
+  <form method="post" action="/admin/nodes" class="form-grid">
     <label class="field">Name<input name="name" placeholder="frankfurt" required></label>
     <label class="field">Location<input name="location" placeholder="DE"></label>
     <label class="field">Public address<input name="url" placeholder="pop.example.net or 172.20.0.1" required></label>
+    <label class="field">ASN <span class="muted">(optional, defaults to LOCAL_ASN)</span><input name="asn" placeholder="4242420000"></label>
+    <label class="field">DN42 IPv4 <span class="muted">(optional)</span><input name="dn42_ipv4" placeholder="172.20.0.1"></label>
+    <label class="field">DN42 IPv6 <span class="muted">(optional)</span><input name="dn42_ipv6" placeholder="fd00::1"></label>
     <label class="checkbox-label"><input type="checkbox" name="enabled" checked> Enabled</label>
-    <button type="submit" class="btn-primary">Create agent</button>
+    <button type="submit" class="btn-primary">Create node</button>
   </form>
 </div>
 
 <div class="card">
-  <div class="section-title"><h2>Existing PoPs</h2></div>
-  {% if agents %}
+  <div class="section-title"><h2>Existing nodes</h2></div>
+  {% if nodes %}
   <div class="table-wrap">
     <table>
       <thead>
         <tr><th>Name</th><th>Location</th><th>Status</th><th>System</th><th>Enabled</th><th></th></tr>
       </thead>
       <tbody>
-        {% for agent in agents %}
-        {% set rt = agent_runtime[agent.id] %}
+        {% for node in nodes %}
+        {% set rt = node_runtime[node.id] %}
         <tr>
-          <td><a href="/admin/agents/{{ agent.id }}/edit">{{ agent.name }}</a></td>
-          <td>{{ agent.location or "—" }}</td>
+          <td><a href="/admin/nodes/{{ node.id }}/edit">{{ node.name }}</a></td>
+          <td>{{ node.location or "—" }}</td>
           <td class="agent-health">
             <span class="online-state {{ 'is-online' if rt.online else 'is-offline' }}">
               <span class="online-dot" aria-hidden="true"></span>{{ "online" if rt.online else "offline" }}
             </span>
           </td>
           <td><span class="system-summary" title="{{ rt.system_summary }}">{{ rt.system_summary }}</span></td>
-          <td>{{ bool_pill(agent.enabled, "on", "off") }}</td>
-          <td class="nowrap"><a class="btn btn-secondary btn-sm" href="/admin/agents/{{ agent.id }}/edit">Manage →</a></td>
+          <td>{{ bool_pill(node.enabled, "on", "off") }}</td>
+          <td class="nowrap"><a class="btn btn-secondary btn-sm" href="/admin/nodes/{{ node.id }}/edit">Manage →</a></td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
   {% else %}
-  <div class="empty-state">No PoPs yet. Add one above.</div>
+  <div class="empty-state">No nodes yet. Add one above.</div>
   {% endif %}
 </div>
 {% endblock %}

@@ -1,27 +1,28 @@
 {% extends "admin/layout.html" %}
 {% from "macros.html" import page_header, deploy_badge %}
-{% block title %}Peer #{{ peer.id }} · Peerings · {{ settings.app_name }}{% endblock %}
+{% block title %}Peer {{ peer.id[:8] }} · Peerings · {{ settings.app_name }}{% endblock %}
 {% block admin %}
-{{ page_header("Peer #" ~ peer.id ~ " · AS" ~ peer.asn, "Edit this peering on " ~ peer.agent.name ~ ".") }}
+{{ page_header("Peer · AS" ~ peer.asn, "Edit this peering on " ~ peer.node.name ~ ".") }}
 <p><a class="btn btn-ghost btn-sm" href="/admin/peers">← All peerings</a></p>
 
 <div class="card">
   <h2>Configuration</h2>
+  <p class="muted">UUID <span class="mono">{{ peer.id }}</span></p>
   <form method="post" action="/admin/peers/{{ peer.id }}/update" class="form-grid">
     <label class="field">Peer ASN
       <input value="AS{{ peer.asn }}" disabled>
     </label>
-    <label class="field">Agent (PoP)
-      <select name="agent_id" required>
-        {% for agent in agents %}
-          <option value="{{ agent.id }}" {% if peer.agent_id == agent.id %}selected{% endif %}>
-            {{ agent.name }}{% if not agent.enabled %} (disabled){% endif %}
+    <label class="field">Node
+      <select name="node_id" required>
+        {% for node in nodes %}
+          <option value="{{ node.id }}" {% if peer.node_id == node.id %}selected{% endif %}>
+            {{ node.name }}{% if not node.enabled %} (disabled){% endif %}
           </option>
         {% endfor %}
       </select>
     </label>
-    <label class="field">WireGuard endpoint
-      <input name="endpoint" value="{{ peer.endpoint }}" required>
+    <label class="field">WireGuard endpoint <span class="muted">(optional)</span>
+      <input name="endpoint" value="{{ peer.endpoint }}" placeholder="host:port (blank = peer dials us)">
     </label>
     <label class="field">WireGuard public key
       <input name="wg_public_key" value="{{ peer.wg_public_key }}" required>
@@ -64,7 +65,7 @@
 <div class="card">
   <h2>Danger zone</h2>
   <form method="post" action="/admin/peers/{{ peer.id }}/delete"
-        data-confirm="Delete peer #{{ peer.id }} (AS{{ peer.asn }})? This tears it down on the router.">
+        data-confirm="Delete this peer (AS{{ peer.asn }})? This tears it down on the node.">
     <button type="submit" class="btn-danger">Delete this peer</button>
   </form>
 </div>

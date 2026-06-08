@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% from "macros.html" import page_header, status_badge, deploy_badge, bool_pill, copy_button %}
+{% block title %}Peer {{ peer.id[:8] }} · {{ settings.app_name }}{% endblock %}
+{% block content %}
+{{ page_header("Peer · AS" ~ peer.asn, "On node " ~ node.name ~ ".") }}
+<p><a class="btn btn-ghost btn-sm" href="/portal">← My Peers</a></p>
+
+<div class="card">
+  <h2>Peer</h2>
+  <div class="kv">
+    <div class="kv-row">
+      <span class="kv-key">UUID</span>
+      <span class="kv-val mono">{{ peer.id }}</span>{{ copy_button(peer.id) }}
+    </div>
+    <div class="kv-row">
+      <span class="kv-key">Enabled</span>
+      <span class="kv-val">{{ bool_pill(enabled, "enabled", "disabled") }}</span>
+    </div>
+    <div class="kv-row">
+      <span class="kv-key">Deployment</span>
+      <span class="kv-val">{{ deploy_badge(peer.deploy_status) }}</span>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Configure your side</h2>
+  <p class="muted">Use these "our side" details in your own WireGuard + BGP config.</p>
+  <div class="kv">
+    <div class="kv-row">
+      <span class="kv-key">Endpoint</span>
+      <span class="kv-val mono">{{ peering.endpoint }}</span>{{ copy_button(peering.endpoint) }}
+    </div>
+    <div class="kv-row">
+      <span class="kv-key">Our WireGuard public key</span>
+      <span class="kv-val mono">{{ peering.public_key }}</span>{{ copy_button(peering.public_key) }}
+    </div>
+    <div class="kv-row">
+      <span class="kv-key">Our tunnel IP (your BGP neighbor)</span>
+      <span class="kv-val mono">{{ peering.tunnel_ip }}</span>{{ copy_button(peering.tunnel_ip) }}
+    </div>
+    <div class="kv-row">
+      <span class="kv-key">WireGuard MTU</span>
+      <span class="kv-val mono">{{ peering.mtu }}</span>
+    </div>
+  </div>
+  <p style="margin-top:12px"><a class="btn btn-secondary btn-sm" href="/portal/peers/{{ peer.id }}/config">View full config</a></p>
+</div>
+
+<div class="card">
+  <h2>Node</h2>
+  <div class="kv">
+    <div class="kv-row"><span class="kv-key">Name</span><span class="kv-val">{{ node.name }}{% if node.location %} — {{ node.location }}{% endif %}</span></div>
+    <div class="kv-row"><span class="kv-key">ASN</span><span class="kv-val mono">{% if node_asn %}AS{{ node_asn }}{% else %}—{% endif %}</span></div>
+    <div class="kv-row"><span class="kv-key">DN42 IPv4</span><span class="kv-val mono">{{ node.dn42_ipv4 or "—" }}</span></div>
+    <div class="kv-row"><span class="kv-key">DN42 IPv6</span><span class="kv-val mono">{{ node.dn42_ipv6 or "—" }}</span></div>
+    <div class="kv-row"><span class="kv-key">Link-local (our side)</span><span class="kv-val mono">{{ peer.local_link_address or "—" }}</span></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Live status</h2>
+  {% if status_error %}
+  <pre class="terminal bad">{{ status_error }}</pre>
+  {% else %}
+  <div class="kv">
+    <div class="kv-row"><span class="kv-key">WireGuard</span><span class="kv-val mono">{{ wg_status or "—" }}</span></div>
+    <div class="kv-row"><span class="kv-key">BGP session</span><span class="kv-val mono">{{ bgp_status or "—" }}</span></div>
+  </div>
+  {% endif %}
+  <p style="margin-top:12px"><a class="btn btn-ghost btn-sm" href="/portal/peers/{{ peer.id }}">↻ Refresh</a></p>
+</div>
+
+<div class="card">
+  <h2>Your submitted details</h2>
+  <div class="kv">
+    <div class="kv-row"><span class="kv-key">Your endpoint</span><span class="kv-val mono">{{ peer.endpoint or "— (you dial us)" }}</span></div>
+    <div class="kv-row"><span class="kv-key">Your WireGuard public key</span><span class="kv-val mono">{{ peer.wg_public_key }}</span></div>
+    <div class="kv-row"><span class="kv-key">Your tunnel IP</span><span class="kv-val mono">{{ peer.peer_link_address }}</span></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Danger zone</h2>
+  <form method="post" action="/portal/peers/{{ peer.id }}/delete"
+        data-confirm="Delete this peer? This tears down the tunnel and BGP session on the node.">
+    <button type="submit" class="btn-danger">Delete this peer</button>
+  </form>
+</div>
+{% endblock %}

@@ -16,7 +16,7 @@ type Server struct {
 	sem    chan struct{}
 }
 
-// New builds the command dispatcher. When maxConcurrency > 0, looking-glass/status commands are
+// New builds the command dispatcher. When maxConcurrency > 0, looking-glass commands are
 // bounded by a semaphore so public queries cannot exhaust the router's resources.
 func New(r runner.Runner, maxConcurrency int) *Server {
 	s := &Server{Runner: r}
@@ -47,8 +47,6 @@ type pubkeyResponse struct {
 // Command executes one backend websocket request and returns a JSON-serialisable response.
 func (s *Server) Command(command string, payload json.RawMessage) (any, error) {
 	switch command {
-	case "status":
-		return s.limitedResult(s.Runner.Status), nil
 	case "pubkey":
 		return pubkeyResponse{PublicKey: s.Runner.WireGuardPubKey}, nil
 	case "lg.ping":

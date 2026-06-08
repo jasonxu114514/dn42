@@ -6,37 +6,37 @@ from app.peer.validation import DEFAULT_WIREGUARD_MTU
 
 def create_schema() -> None:
     Base.metadata.create_all(bind=engine)
-    _ensure_agent_columns()
+    _ensure_node_columns()
     _ensure_peer_request_columns()
 
 
-def _ensure_agent_columns() -> None:
-    """Backfill columns added to ``Agent`` after a database was first created.
+def _ensure_node_columns() -> None:
+    """Backfill columns added to ``Node`` after a database was first created.
 
-    ``Base.metadata.create_all`` only creates missing *tables*, never missing *columns*, so a column
-    introduced later (here ``agents.wg_public_key``) must be added with an idempotent ALTER on an
-    existing DB. SQLite requires a DEFAULT when adding a NOT NULL column, which we supply.
-    ``create_all`` 只會建立缺少的*資料表*,不會補上缺少的*欄位*,因此日後新增的欄位(此處為
-    ``agents.wg_public_key``)需在既有資料庫以等冪的 ALTER 補上。SQLite 新增 NOT NULL 欄位時必須
-    提供 DEFAULT,故此處給定空字串。
+    ``Base.metadata.create_all`` only creates missing *tables*, never missing *columns*, so a
+    column introduced later (here the per-node ``asn``/``dn42_ipv4``/``dn42_ipv6``) must be added
+    with an idempotent ALTER on an existing DB. SQLite requires a DEFAULT when adding a NOT NULL
+    column, which we supply. This runs on the ``nodes`` table (the int→UUID rename from the old
+    ``agents`` table is handled once by scripts/migrate_to_uuid_nodes.py, not here).
+    ``create_all`` 只建立缺少的*資料表*,不會補上缺少的*欄位*;此處對 ``nodes`` 以等冪 ALTER 補上
+    日後新增的欄位。int→UUID 與 agents→nodes 的改名由 migrate_to_uuid_nodes.py 一次處理。
     """
     inspector = inspect(engine)
-    if "agents" not in inspector.get_table_names():
+    if "nodes" not in inspector.get_table_names():
         return
-    columns = {col["name"] for col in inspector.get_columns("agents")}
-    if "wg_public_key" not in columns:
-        with engine.begin() as conn:
-            conn.execute(
-                text("ALTER TABLE agents ADD COLUMN wg_public_key VARCHAR(128) NOT NULL DEFAULT ''")
-            )
-    if "last_seen_at" not in columns:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE agents ADD COLUMN last_seen_at DATETIME"))
-    if "system_status_json" not in columns:
-        with engine.begin() as conn:
-            conn.execute(
-                text("ALTER TABLE agents ADD COLUMN system_status_json TEXT NOT NULL DEFAULT '{}'")
-            )
+    columns = {col["name"] for col in inspector.get_columns("nodes")}
+    additions = {
+        "wg_public_key": "VARCHAR(128) NOT NULL DEFAULT ''",
+        "last_seen_at": "DATETIME",
+        "system_status_json": "TEXT NOT NULL DEFAULT '{}'",
+        "asn": "VARCHAR(32) NOT NULL DEFAULT ''",
+        "dn42_ipv4": "VARCHAR(64) NOT NULL DEFAULT ''",
+        "dn42_ipv6": "VARCHAR(64) NOT NULL DEFAULT ''",
+    }
+    for name, ddl in additions.items():
+        if name not in columns:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE nodes ADD COLUMN {name} {ddl}"))
 
 
 def _ensure_peer_request_columns() -> None:

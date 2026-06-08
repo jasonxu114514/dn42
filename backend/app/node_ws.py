@@ -14,7 +14,7 @@ import anyio
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
-from app.db.models import Agent, utcnow
+from app.db.models import Node, utcnow
 from app.db.session import SessionLocal
 from app.peer.validation import normalize_wireguard_key
 
@@ -23,32 +23,32 @@ router = APIRouter()
 MAX_STATUS_OUTPUT = 65536
 
 
-class AgentOfflineError(RuntimeError):
+class NodeOfflineError(RuntimeError):
     pass
 
 
-class AgentRequestError(RuntimeError):
+class NodeRequestError(RuntimeError):
     pass
 
 
 @dataclass(frozen=True)
-class AgentAuth:
-    id: int
+class NodeAuth:
+    id: str
     name: str
 
 
 @dataclass
-class AgentRuntime:
+class NodeRuntime:
     online: bool = False
     connected_at: datetime | None = None
     last_seen_at: datetime | None = None
     system: dict[str, Any] = field(default_factory=dict)
 
 
-class AgentConnection:
-    def __init__(self, websocket: WebSocket, agent: AgentAuth) -> None:
+class NodeConnection:
+    def __init__(self, websocket: WebSocket, node: NodeAuth) -> None:
         self.websocket = websocket
-        self.agent = agent
+        self.node = node
         self.pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self.send_lock = asyncio.Lock()
 
@@ -70,54 +70,54 @@ class AgentConnection:
         self.pending.clear()
 
 
-class AgentHub:
+class NodeHub:
     def __init__(self) -> None:
-        self._connections: dict[int, AgentConnection] = {}
-        self._runtime: dict[int, AgentRuntime] = {}
+        self._connections: dict[str, NodeConnection] = {}
+        self._runtime: dict[str, NodeRuntime] = {}
         self._lock = RLock()
 
-    async def register(self, websocket: WebSocket, agent: AgentAuth) -> AgentConnection:
-        connection = AgentConnection(websocket, agent)
-        previous: AgentConnection | None = None
+    async def register(self, websocket: WebSocket, node: NodeAuth) -> NodeConnection:
+        connection = NodeConnection(websocket, node)
+        previous: NodeConnection | None = None
         now = utcnow()
         with self._lock:
-            previous = self._connections.get(agent.id)
-            self._connections[agent.id] = connection
-            state = self._runtime.setdefault(agent.id, AgentRuntime())
+            previous = self._connections.get(node.id)
+            self._connections[node.id] = connection
+            state = self._runtime.setdefault(node.id, NodeRuntime())
             state.online = True
             state.connected_at = now
             state.last_seen_at = now
         if previous is not None:
-            previous.fail_pending(AgentOfflineError(f"Agent '{agent.name}' reconnected"))
+            previous.fail_pending(NodeOfflineError(f"Node '{node.name}' reconnected"))
             await previous.close(code=4000, reason="replaced by a newer connection")
-        _store_agent_status(agent.id, system=None, public_key=None)
-        logger.info("Agent %s connected over websocket", agent.name)
+        _store_node_status(node.id, system=None, public_key=None)
+        logger.info("Node %s connected over websocket", node.name)
         return connection
 
-    async def unregister(self, connection: AgentConnection) -> None:
+    async def unregister(self, connection: NodeConnection) -> None:
         with self._lock:
-            current = self._connections.get(connection.agent.id)
+            current = self._connections.get(connection.node.id)
             if current is not connection:
                 return
-            self._connections.pop(connection.agent.id, None)
-            state = self._runtime.setdefault(connection.agent.id, AgentRuntime())
+            self._connections.pop(connection.node.id, None)
+            state = self._runtime.setdefault(connection.node.id, NodeRuntime())
             state.online = False
-        connection.fail_pending(AgentOfflineError(f"Agent '{connection.agent.name}' disconnected"))
-        logger.info("Agent %s disconnected from websocket", connection.agent.name)
+        connection.fail_pending(NodeOfflineError(f"Node '{connection.node.name}' disconnected"))
+        logger.info("Node %s disconnected from websocket", connection.node.name)
 
     async def request(
         self,
-        agent: Agent,
+        node: Node,
         command: str,
         payload: dict[str, Any] | None,
         timeout: float,
     ) -> dict[str, Any]:
-        if not agent.enabled:
-            raise ValueError("Agent is disabled")
+        if not node.enabled:
+            raise ValueError("Node is disabled")
         with self._lock:
-            connection = self._connections.get(agent.id)
+            connection = self._connections.get(node.id)
         if connection is None:
-            raise AgentOfflineError(f"Agent '{agent.name}' is offline")
+            raise NodeOfflineError(f"Node '{node.name}' is offline")
 
         request_id = uuid.uuid4().hex
         loop = asyncio.get_running_loop()
@@ -134,24 +134,24 @@ class AgentHub:
             )
             response = await asyncio.wait_for(future, timeout=timeout)
         except TimeoutError as exc:
-            raise AgentRequestError(f"Agent '{agent.name}' timed out running {command}") from exc
-        except AgentOfflineError:
+            raise NodeRequestError(f"Node '{node.name}' timed out running {command}") from exc
+        except NodeOfflineError:
             raise
         except Exception as exc:
-            raise AgentOfflineError(f"Agent '{agent.name}' connection failed: {exc}") from exc
+            raise NodeOfflineError(f"Node '{node.name}' connection failed: {exc}") from exc
         finally:
             connection.pending.pop(request_id, None)
 
         error = response.get("error")
         if error:
-            raise AgentRequestError(str(error))
+            raise NodeRequestError(str(error))
         result = response.get("result")
         if not isinstance(result, dict):
-            raise AgentRequestError("Agent returned an invalid response")
+            raise NodeRequestError("Node returned an invalid response")
         self._mark_online(connection)
         return result
 
-    async def handle_message(self, connection: AgentConnection, message: dict[str, Any]) -> None:
+    async def handle_message(self, connection: NodeConnection, message: dict[str, Any]) -> None:
         message_type = message.get("type")
         if message_type == "response":
             request_id = str(message.get("id") or "")
@@ -168,11 +168,11 @@ class AgentHub:
                 public_key=public_key if isinstance(public_key, str) else None,
             )
             return
-        logger.debug("Ignoring websocket message from agent %s: %r", connection.agent.name, message)
+        logger.debug("Ignoring websocket message from node %s: %r", connection.node.name, message)
 
     def _mark_online(
         self,
-        connection: AgentConnection,
+        connection: NodeConnection,
         system: dict[str, Any] | None = None,
     ) -> bool:
         """Refresh in-memory liveness for a still-current connection, returning False once it has
@@ -180,9 +180,9 @@ class AgentHub:
         periodic heartbeat (see record_seen)."""
         now = utcnow()
         with self._lock:
-            if self._connections.get(connection.agent.id) is not connection:
+            if self._connections.get(connection.node.id) is not connection:
                 return False
-            state = self._runtime.setdefault(connection.agent.id, AgentRuntime())
+            state = self._runtime.setdefault(connection.node.id, NodeRuntime())
             state.online = True
             state.last_seen_at = now
             if system:
@@ -191,47 +191,47 @@ class AgentHub:
 
     async def record_seen(
         self,
-        connection: AgentConnection,
+        connection: NodeConnection,
         *,
         system: dict[str, Any] | None,
         public_key: str | None,
     ) -> None:
         if self._mark_online(connection, system):
-            _store_agent_status(connection.agent.id, system=system, public_key=public_key)
+            _store_node_status(connection.node.id, system=system, public_key=public_key)
 
-    def snapshot(self) -> dict[int, AgentRuntime]:
+    def snapshot(self) -> dict[str, NodeRuntime]:
         with self._lock:
             return {
-                agent_id: AgentRuntime(
+                node_id: NodeRuntime(
                     online=state.online,
                     connected_at=state.connected_at,
                     last_seen_at=state.last_seen_at,
                     system=dict(state.system),
                 )
-                for agent_id, state in self._runtime.items()
+                for node_id, state in self._runtime.items()
             }
 
 
-agent_hub = AgentHub()
+node_hub = NodeHub()
 
 
-async def request_agent(
-    agent: Agent,
+async def request_node(
+    node: Node,
     command: str,
     payload: dict[str, Any] | None = None,
     timeout: float = 12.0,
 ) -> dict[str, Any]:
-    return await agent_hub.request(agent, command, payload, timeout)
+    return await node_hub.request(node, command, payload, timeout)
 
 
-def request_agent_sync(
-    agent: Agent,
+def request_node_sync(
+    node: Node,
     command: str,
     payload: dict[str, Any] | None = None,
     timeout: float = 12.0,
 ) -> dict[str, Any]:
     try:
-        return anyio.from_thread.run(request_agent, agent, command, payload, timeout)
+        return anyio.from_thread.run(request_node, node, command, payload, timeout)
     except RuntimeError as exc:
         message = str(exc)
         if "AnyIO worker thread" not in message and "can only be run from" not in message:
@@ -239,43 +239,46 @@ def request_agent_sync(
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(request_agent(agent, command, payload, timeout))
+            return asyncio.run(request_node(node, command, payload, timeout))
         raise
 
 
 @router.websocket("/api/agents/ws")
-async def agent_websocket(websocket: WebSocket) -> None:
-    agent = _authenticate_agent(websocket)
-    if agent is None:
+async def node_websocket(websocket: WebSocket) -> None:
+    # The dial path stays /api/agents/ws for backward compatibility with deployed agents'
+    # config.json (the agent software is unchanged in how it connects). 路徑維持 /api/agents/ws
+    # 以相容既有 agent 設定。
+    node = _authenticate_node(websocket)
+    if node is None:
         await websocket.close(code=1008)
         return
 
     await websocket.accept()
-    connection = await agent_hub.register(websocket, agent)
+    connection = await node_hub.register(websocket, node)
     try:
         while True:
             message = await websocket.receive_json()
             if isinstance(message, dict):
-                await agent_hub.handle_message(connection, message)
+                await node_hub.handle_message(connection, message)
             else:
-                logger.debug("Ignoring non-object websocket message from agent %s", agent.name)
+                logger.debug("Ignoring non-object websocket message from node %s", node.name)
     except WebSocketDisconnect:
         pass
     except ValueError as exc:
-        logger.warning("Invalid websocket JSON from agent %s: %s", agent.name, exc)
+        logger.warning("Invalid websocket JSON from node %s: %s", node.name, exc)
     finally:
-        await agent_hub.unregister(connection)
+        await node_hub.unregister(connection)
 
 
-def agent_runtime_context(agents: list[Agent]) -> dict[int, dict[str, Any]]:
-    live = agent_hub.snapshot()
-    context: dict[int, dict[str, Any]] = {}
-    for agent in agents:
-        state = live.get(agent.id)
-        stored_system = _load_system_status(agent.system_status_json)
+def node_runtime_context(nodes: list[Node]) -> dict[str, dict[str, Any]]:
+    live = node_hub.snapshot()
+    context: dict[str, dict[str, Any]] = {}
+    for node in nodes:
+        state = live.get(node.id)
+        stored_system = _load_system_status(node.system_status_json)
         system = state.system if state and state.system else stored_system
-        last_seen_at = state.last_seen_at if state and state.last_seen_at else agent.last_seen_at
-        context[agent.id] = {
+        last_seen_at = state.last_seen_at if state and state.last_seen_at else node.last_seen_at
+        context[node.id] = {
             "online": bool(state and state.online),
             "connected_at": state.connected_at if state else None,
             "last_seen_at": last_seen_at,
@@ -286,20 +289,20 @@ def agent_runtime_context(agents: list[Agent]) -> dict[int, dict[str, Any]]:
     return context
 
 
-def _authenticate_agent(websocket: WebSocket) -> AgentAuth | None:
+def _authenticate_node(websocket: WebSocket) -> NodeAuth | None:
     name = websocket.query_params.get("name", "").strip()
     if not name:
         return None
     token = _bearer_token(websocket.headers.get("authorization", ""))
     with SessionLocal() as db:
-        agent = db.query(Agent).filter(Agent.name == name).one_or_none()
-        if agent is None or not agent.enabled:
+        node = db.query(Node).filter(Node.name == name).one_or_none()
+        if node is None or not node.enabled:
             return None
-        if agent.token and not secrets.compare_digest(token, agent.token):
+        if node.token and not secrets.compare_digest(token, node.token):
             return None
-        if not agent.token and token:
+        if not node.token and token:
             return None
-        return AgentAuth(id=agent.id, name=agent.name)
+        return NodeAuth(id=node.id, name=node.name)
 
 
 def _bearer_token(header: str) -> str:
@@ -309,24 +312,24 @@ def _bearer_token(header: str) -> str:
     return ""
 
 
-def _store_agent_status(
-    agent_id: int,
+def _store_node_status(
+    node_id: str,
     *,
     system: dict[str, Any] | None,
     public_key: str | None,
 ) -> None:
     with SessionLocal() as db:
-        agent = db.query(Agent).filter(Agent.id == agent_id).one_or_none()
-        if agent is None:
+        node = db.query(Node).filter(Node.id == node_id).one_or_none()
+        if node is None:
             return
-        agent.last_seen_at = utcnow()
+        node.last_seen_at = utcnow()
         if system:
-            agent.system_status_json = json.dumps(system, sort_keys=True, separators=(",", ":"))
+            node.system_status_json = json.dumps(system, sort_keys=True, separators=(",", ":"))
         if public_key:
             try:
-                agent.wg_public_key = normalize_wireguard_key(public_key)
+                node.wg_public_key = normalize_wireguard_key(public_key)
             except ValueError:
-                logger.warning("Agent %s sent an invalid WireGuard public key", agent.name)
+                logger.warning("Node %s sent an invalid WireGuard public key", node.name)
         db.commit()
 
 

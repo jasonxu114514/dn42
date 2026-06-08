@@ -39,9 +39,9 @@ type Result struct {
 }
 
 type DeployRequest struct {
-	RequestID       int    `json:"request_id"`
+	RequestID       string `json:"request_id"`
 	ASN             string `json:"asn"`
-	Agent           string `json:"agent"`
+	Node            string `json:"node"`
 	ProtocolName    string `json:"protocol_name"`
 	WireGuardConfig string `json:"wireguard_config"`
 	BirdConfig      string `json:"bird_config"`
@@ -55,7 +55,7 @@ type DeployResult struct {
 }
 
 type RemoveRequest struct {
-	RequestID    int    `json:"request_id"`
+	RequestID    string `json:"request_id"`
 	ProtocolName string `json:"protocol_name"`
 }
 
@@ -293,14 +293,6 @@ func (r Runner) Route(target string) Result {
 	return r.run(r.BirdcPath, "show", "route", "for", target)
 }
 
-func (r Runner) Status() Result {
-	bird := r.run(r.BirdcPath, "show", "protocols")
-	if bird.OK {
-		return bird
-	}
-	return Result{OK: false, Output: fmt.Sprintf("bird status failed:\n%s", bird.Output)}
-}
-
 func (r Runner) WireGuardStatus() Result {
 	return r.run(r.WgPath, "show")
 }
@@ -314,8 +306,9 @@ func (r Runner) BirdStatus() Result {
 	return Result{OK: status.OK && protocols.OK, Output: output}
 }
 
-// PeerStatus returns the detailed BIRD protocol state for a single peer, used by the bot's
-// per-peer /status command. protocolName is validated and passed as fixed argv, never a shell.
+// PeerStatus returns the detailed BIRD protocol state for a single peer, used by the per-peer
+// status views (the web admin/portal pages and the bot's /listpeers). protocolName is validated
+// and passed as fixed argv, never a shell.
 func (r Runner) PeerStatus(protocolName string) Result {
 	protocolName = strings.TrimSpace(protocolName)
 	if !safeNameRE.MatchString(protocolName) {
@@ -343,7 +336,7 @@ func (r Runner) PeerWireGuard(protocolName string) Result {
 
 func (r Runner) DeployPeer(req DeployRequest) DeployResult {
 	req.ASN = strings.TrimSpace(req.ASN)
-	req.Agent = strings.TrimSpace(req.Agent)
+	req.Node = strings.TrimSpace(req.Node)
 	req.ProtocolName = strings.TrimSpace(req.ProtocolName)
 	req.WireGuardConfig = strings.TrimSpace(req.WireGuardConfig)
 	req.BirdConfig = strings.TrimSpace(req.BirdConfig)
@@ -407,7 +400,7 @@ func (r Runner) DeployPeer(req DeployRequest) DeployResult {
 
 func (r Runner) RemovePeer(req RemoveRequest) DeployResult {
 	req.ProtocolName = strings.TrimSpace(req.ProtocolName)
-	if req.RequestID <= 0 {
+	if req.RequestID == "" {
 		return DeployResult{OK: false, Output: "request_id is required"}
 	}
 	if !safeNameRE.MatchString(req.ProtocolName) {
@@ -459,14 +452,14 @@ func (r Runner) renderWireGuardConfig(config string) (string, error) {
 }
 
 func validateDeployRequest(req DeployRequest) error {
-	if req.RequestID <= 0 {
+	if req.RequestID == "" {
 		return errors.New("request_id is required")
 	}
 	if req.ASN == "" || len(req.ASN) > 32 || hasUnsafeTargetChar(req.ASN) {
 		return errors.New("invalid asn")
 	}
-	if req.Agent == "" || len(req.Agent) > 64 || strings.ContainsAny(req.Agent, "/\\") {
-		return errors.New("invalid agent")
+	if req.Node == "" || len(req.Node) > 64 || strings.ContainsAny(req.Node, "/\\") {
+		return errors.New("invalid node")
 	}
 	if !safeNameRE.MatchString(req.ProtocolName) {
 		return errors.New("invalid protocol_name")

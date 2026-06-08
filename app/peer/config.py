@@ -43,8 +43,17 @@ def peer_wireguard_mtu(peer: PeerRequest) -> int:
 
 
 def peer_protocol_name(peer: PeerRequest, node: Node) -> str:
-    """WireGuard interface, config filename, and BIRD protocol name for this peer."""
-    return f"DN42_{normalize_asn_number(peer.asn)[-4:]}"
+    """WireGuard interface, config filename, and BIRD protocol name for this peer.
+
+    Must be unique among all peers on one node: it is the wg-quick interface name, the
+    ``<dir>/<name>.conf`` filename, and the BIRD protocol name, so a clash makes two
+    peers clobber each other's tunnel and config. The ASN's last 4 digits collide when
+    two ASNs share that suffix on the same node (e.g. AS4242425001 vs AS65001 -> 5001),
+    so the peer UUID's last 4 hex chars disambiguate. Stays within the 15-char Linux
+    interface-name limit (IFNAMSIZ): ``DN42_`` + 4 + ``_`` + 4 = 14 chars.
+    """
+    asn_suffix = normalize_asn_number(peer.asn)[-4:]
+    return f"DN42_{asn_suffix}_{peer.id[-4:]}"
 
 
 def peering_info(peer: PeerRequest, node: Node, local_asn: str = "<our-asn>") -> dict[str, str]:

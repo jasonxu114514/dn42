@@ -106,6 +106,26 @@ def _load_peer_for_node_service(db, peer: PeerRequest) -> PeerRequest:
     return loaded
 
 
+def _teardown_orphan_on_old_node(peer: PeerSnapshot, node: NodeSnapshot) -> None:
+    """Best-effort teardown of a peer's config on the node it was just moved off of.
+
+    The peer row already points at — and has been (re)deployed/torn down on — the new node;
+    this only clears the WireGuard/BIRD config orphaned on the old node. The protocol name
+    derives from the peer's ASN and id, neither of which a node move changes, so the snapshot
+    taken before reassignment targets the right files. The old node may be offline, so a
+    failure is logged rather than raised — the node move itself still succeeds.
+    """
+    try:
+        remove_peer(peer, node)
+    except Exception as exc:
+        logger.warning(
+            "Could not tear down peer %s on its previous node %s after a node change: %s",
+            peer.id,
+            node.name,
+            exc,
+        )
+
+
 def deploy_peer_request(db, peer: PeerRequest, settings: Settings) -> PeerRequest:
     """Commit the deploying marker before the synchronous node service round-trip."""
     peer = _load_peer_for_node_service(db, peer)
@@ -413,6 +433,13 @@ def update_peer(
         bgp_extended=bgp_extended,
         settings=settings,
     )
+    # A node change orphans the peer's WireGuard/BIRD config on the previous node, so
+    # snapshot the old node now (before reassignment) and tear it down once the peer's new
+    # state has been persisted below.
+    moved_from: tuple[PeerSnapshot, NodeSnapshot] | None = None
+    if peer.node_id != node.id:
+        moved_from = _snapshot_peer(peer)
+
     peer.node_id = node.id
     peer.node = node
     peer.endpoint = values.endpoint
@@ -425,14 +452,19 @@ def update_peer(
     peer.bgp_extended = values.bgp_extended
     peer.status = status
     peer.updated_at = utcnow()
+
     if status == "disabled":
-        return teardown_peer_request(db, peer)
+        updated = teardown_peer_request(db, peer)
     elif redeploy:
-        return deploy_peer_request(db, peer, settings)
-    db.commit()
-    updated = peer_with_node(db, peer.id)
-    if updated is None:
-        raise ValueError("Peer not found")
+        updated = deploy_peer_request(db, peer, settings)
+    else:
+        db.commit()
+        updated = peer_with_node(db, peer.id)
+        if updated is None:
+            raise ValueError("Peer not found")
+
+    if moved_from is not None:
+        _teardown_orphan_on_old_node(*moved_from)
     return updated
 
 

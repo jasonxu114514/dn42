@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import secrets
@@ -94,7 +95,9 @@ class NodeHub:
         if previous is not None:
             previous.fail_pending(NodeOfflineError(f"Node '{node.name}' reconnected"))
             await previous.close(code=4000, reason="replaced by a newer connection")
-        _store_node_status(node.id, system=None, public_key=None)
+        await anyio.to_thread.run_sync(
+            functools.partial(_store_node_status, node.id, system=None, public_key=None)
+        )
         with self._lock:
             state = self._runtime.setdefault(node.id, NodeRuntime())
             state.persisted_at = now
@@ -204,13 +207,13 @@ class NodeHub:
         public_key: str | None,
     ) -> None:
         if self._mark_online(connection, system):
-            self._persist_seen_if_needed(
+            await self._persist_seen_if_needed(
                 connection.node.id,
                 system=system,
                 public_key=public_key,
             )
 
-    def _persist_seen_if_needed(
+    async def _persist_seen_if_needed(
         self,
         node_id: str,
         *,
@@ -233,7 +236,12 @@ class NodeHub:
                 state.persisted_system_json = system_json
             if public_key is not None:
                 state.persisted_public_key = public_key
-        _store_node_status(node_id, system=system, public_key=public_key)
+        # DB persistence is offloaded to a worker thread: this runs inside the async WSS
+        # handler, so a synchronous SQLAlchemy commit here would block the event loop (and
+        # every other async request) for the duration of each heartbeat write.
+        await anyio.to_thread.run_sync(
+            functools.partial(_store_node_status, node_id, system=system, public_key=public_key)
+        )
 
     def snapshot(self) -> dict[str, NodeRuntime]:
         with self._lock:
@@ -284,7 +292,7 @@ def request_node_sync(
 
 @router.websocket("/api/nodes/ws")
 async def node_websocket(websocket: WebSocket) -> None:
-    node = _authenticate_node(websocket)
+    node = await _authenticate_node(websocket)
     if node is None:
         await websocket.close(code=1008)
         return
@@ -325,18 +333,27 @@ def node_runtime_context(nodes: list[Node]) -> dict[str, dict[str, Any]]:
     return context
 
 
-def _authenticate_node(websocket: WebSocket) -> NodeAuth | None:
+async def _authenticate_node(websocket: WebSocket) -> NodeAuth | None:
     name = websocket.query_params.get("name", "").strip()
     if not name:
         return None
     token = _bearer_token(websocket.headers.get("authorization", ""))
+    # Run the lookup in a worker thread so the synchronous SQLAlchemy query never blocks
+    # the event loop while a node is connecting.
+    return await anyio.to_thread.run_sync(_lookup_node_auth, name, token)
+
+
+def _lookup_node_auth(name: str, token: str) -> NodeAuth | None:
     with SessionLocal() as db:
         node = db.query(Node).filter(Node.name == name).one_or_none()
         if node is None or not node.enabled:
             return None
-        if node.token and not secrets.compare_digest(token, node.token):
+        # A node with no token configured must never be connectable: its name is
+        # semi-public (it appears on the status page), so a tokenless node would let
+        # anyone who knows the name impersonate it and receive deploy commands.
+        if not node.token:
             return None
-        if not node.token and token:
+        if not secrets.compare_digest(token, node.token):
             return None
         return NodeAuth(id=node.id, name=node.name)
 

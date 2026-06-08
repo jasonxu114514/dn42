@@ -19,7 +19,7 @@ from app.peer.config import (
     peering_info,
     render_user_config,
 )
-from app.peer.service import create_peer, delete_peer, derive_peer_link_address
+from app.peer.service import create_peer, delete_peer, derive_peer_link_address, preview_peer
 from app.peer.validation import (
     DEFAULT_WIREGUARD_MTU,
     MAX_WIREGUARD_MTU,
@@ -85,8 +85,11 @@ def create_peer_request(
     node_id: str = Form(...),
     wg_public_key: str = Form(...),
     endpoint: str = Form(""),
-    peer_link_address: str = Form(...),
+    peer_dn42_ipv4: str = Form(""),
+    peer_dn42_ipv6: str = Form(""),
+    peer_link_address: str = Form(""),
     wg_mtu: str | None = Form(None),
+    bgp_extended: str | None = Form(None),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     user = current_user(request, db)
@@ -104,7 +107,10 @@ def create_peer_request(
             endpoint=endpoint,
             wg_public_key=wg_public_key,
             wg_mtu=wg_mtu,
+            peer_dn42_ipv4=peer_dn42_ipv4,
+            peer_dn42_ipv6=peer_dn42_ipv6,
             peer_link_address=peer_link_address,
+            bgp_extended=bgp_extended,
             settings=settings,
         )
     except ValueError as exc:
@@ -114,6 +120,55 @@ def create_peer_request(
     db.commit()
     flash(request, "Peer created and deployment requested.", "success")
     return RedirectResponse("/portal", status_code=303)
+
+
+@router.post("/portal/peers/confirm", response_class=HTMLResponse)
+def confirm_peer_request(
+    request: Request,
+    node_id: str = Form(...),
+    wg_public_key: str = Form(...),
+    endpoint: str = Form(""),
+    peer_dn42_ipv4: str = Form(""),
+    peer_dn42_ipv6: str = Form(""),
+    peer_link_address: str = Form(""),
+    wg_mtu: str | None = Form(None),
+    bgp_extended: str | None = Form(None),
+    db: Session = Depends(get_db),
+) -> HTMLResponse | RedirectResponse:
+    user = current_user(request, db)
+    if user is None:
+        return RedirectResponse("/login", status_code=303)
+    node = query_enabled_nodes(db).filter(Node.id == node_id).one_or_none()
+    if node is None:
+        flash(request, "Unknown or disabled node.", "error")
+        return RedirectResponse("/portal/new", status_code=303)
+    try:
+        preview = preview_peer(
+            user=user,
+            node=node,
+            endpoint=endpoint,
+            wg_public_key=wg_public_key,
+            wg_mtu=wg_mtu,
+            peer_dn42_ipv4=peer_dn42_ipv4,
+            peer_dn42_ipv6=peer_dn42_ipv6,
+            peer_link_address=peer_link_address,
+            bgp_extended=bgp_extended,
+            settings=settings,
+        )
+    except ValueError as exc:
+        flash(request, str(exc), "error")
+        return RedirectResponse("/portal/new", status_code=303)
+    return render(
+        request,
+        "portal_confirm.html",
+        {
+            "node": node,
+            "values": preview["values"],
+            "peering": preview["peering"],
+        },
+        user=user,
+        active="new",
+    )
 
 
 @router.get("/portal/peers/{peer_id}", response_class=HTMLResponse)
@@ -148,7 +203,9 @@ async def peer_detail(
         {
             "peer": peer,
             "node": node,
-            "peering": peering_info(peer, node),
+            "peering": peering_info(
+                peer, node, node_effective_asn(node, settings.local_asn) or "<our-asn>"
+            ),
             "node_asn": node_effective_asn(node, settings.local_asn),
             "enabled": peer.status == "approved",
             "wg_status": wg_status,

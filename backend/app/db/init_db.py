@@ -45,11 +45,13 @@ def _ensure_peer_request_columns() -> None:
     if "peer_requests" not in inspector.get_table_names():
         return
     columns = {col["name"] for col in inspector.get_columns("peer_requests")}
-    if "wg_mtu" not in columns:
-        with engine.begin() as conn:
-            conn.execute(
-                text(
-                    "ALTER TABLE peer_requests "
-                    f"ADD COLUMN wg_mtu INTEGER NOT NULL DEFAULT {DEFAULT_WIREGUARD_MTU}"
-                )
-            )
+    additions = {
+        "wg_mtu": f"INTEGER NOT NULL DEFAULT {DEFAULT_WIREGUARD_MTU}",
+        "peer_dn42_ipv4": "VARCHAR(64) NOT NULL DEFAULT ''",
+        "peer_dn42_ipv6": "VARCHAR(64) NOT NULL DEFAULT ''",
+        "bgp_extended": "BOOLEAN NOT NULL DEFAULT 1",
+    }
+    for name, ddl in additions.items():
+        if name not in columns:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE peer_requests ADD COLUMN {name} {ddl}"))

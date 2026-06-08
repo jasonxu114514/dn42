@@ -1,6 +1,5 @@
 from app.db.models import Node, PeerRequest
 from app.peer.validation import (
-    asn_link_local_address,
     extract_node_host,
     is_link_local,
     normalize_asn_number,
@@ -10,19 +9,15 @@ from app.peer.validation import (
 
 
 def node_effective_asn(node: Node, fallback_asn: str) -> str:
-    """The Node's own dn42 ASN, or the global LOCAL_ASN fallback when the node sets none.
-
-    Each Node may run its own ASN (admin field); config generation and the addresses shown to
-    peers derive from this value, falling back to the network-wide LOCAL_ASN when blank.
-    每個節點可有自己的 ASN;設定產生與顯示給對等端的位址皆以此為準,留空時退回全網 LOCAL_ASN。"""
+    """Return the node ASN, falling back to LOCAL_ASN when the node leaves it blank."""
     asn = (node.asn or "").strip()
     return asn or (fallback_asn or "").strip()
 
 
 def node_wireguard_endpoint(peer: PeerRequest, node: Node) -> str:
-    """Public WireGuard endpoint a peer dials: the Node host plus the derived listen port."""
+    """Public WireGuard endpoint a peer dials: node host plus ASN-derived listen port."""
     host = extract_node_host(node.url)
-    if ":" in host:  # bare IPv6 — wrap for host:port form
+    if ":" in host:
         host = f"[{host}]"
     try:
         port = wireguard_listen_port(peer.asn)
@@ -43,44 +38,25 @@ def post_up_address(peer: PeerRequest) -> str:
     return f"{local_link_ip(peer)}/64"
 
 
-def local_default_link_ip(local_asn: str) -> str:
-    if local_asn.strip() in {"", "<our-asn>"}:
-        return "<our-link-local>"
-    return asn_link_local_address(local_asn)
-
-
 def peer_wireguard_mtu(peer: PeerRequest) -> int:
     return normalize_wireguard_mtu(getattr(peer, "wg_mtu", None))
 
 
 def peer_protocol_name(peer: PeerRequest, node: Node) -> str:
-    """WireGuard interface, ``.conf`` filenames, and BIRD protocol name for this peer.
-
-    Format is ``DN42_<last4>`` where ``<last4>`` is the last four digits of the peer's ASN. dn42
-    ASNs (``424242xxxx``) are uniquely identified by those four digits, and a Node peers with any
-    ASN at most once, so this never collides within a Node. ``wg-quick`` names the interface after
-    the config filename, so all three stay in sync from this one value (≤15-char interface limit,
-    and it satisfies the agent's ``safeNameRE``).
-
-    本對等的 WireGuard 介面、設定檔名與 BIRD protocol 名,格式為 ``DN42_<對方 ASN 後 4 位>``。
-    """
+    """WireGuard interface, config filename, and BIRD protocol name for this peer."""
     return f"DN42_{normalize_asn_number(peer.asn)[-4:]}"
 
 
-def peering_info(peer: PeerRequest, node: Node) -> dict[str, str]:
-    """The "our side" parameters a peer needs to bring their tunnel up after a successful deploy.
-
-    ``endpoint`` is the WireGuard endpoint they dial (Node host + ASN-derived listen port),
-    ``public_key`` is this Node's WireGuard key, and ``tunnel_ip`` is our in-tunnel address — which
-    is also the BGP neighbor address their side should point at. The public key falls back to the
-    visible placeholder (as in ``render_user_config``) when the Node key has not been fetched yet,
-    so the peer is never silently handed a blank key.
-
-    對端在部署成功後建立隧道所需的「我方」參數:``endpoint`` 為對端撥號的 WireGuard 端點(節點主機
-    + 由 ASN 推導的監聽埠),``public_key`` 為本節點的 WireGuard 公鑰,``tunnel_ip`` 為我方隧道內
-    位址,亦即對端 BGP 應指向的鄰居位址。公鑰未抓取時退回可見佔位字串。
-    """
+def peering_info(peer: PeerRequest, node: Node, local_asn: str = "<our-asn>") -> dict[str, str]:
+    """Operator-side parameters a peer needs to configure their end."""
+    display_asn = local_asn
+    if local_asn != "<our-asn>":
+        display_asn = normalize_asn_number(local_asn)
     return {
+        "asn": display_asn,
+        "ipv4": node.dn42_ipv4 or "",
+        "ipv6": node.dn42_ipv6 or "",
+        "link_local": local_link_ip(peer),
         "endpoint": node_wireguard_endpoint(peer, node),
         "public_key": node.wg_public_key or "<our-wireguard-public-key>",
         "tunnel_ip": local_link_ip(peer),
@@ -89,10 +65,15 @@ def peering_info(peer: PeerRequest, node: Node) -> dict[str, str]:
 
 
 def render_user_config(peer: PeerRequest, node: Node, local_asn: str = "<our-asn>") -> str:
-    local_neighbor = local_default_link_ip(local_asn)
-    # Use the Node's cached public key; fall back to the visible placeholder if it has not been
-    # fetched yet, so the peer never silently gets a wrong key (the admin can Refresh Pubkey).
+    if local_asn.strip() in {"", "<our-asn>"}:
+        local_asn_display = "<our-asn>"
+    else:
+        local_asn_display = f"AS{normalize_asn_number(local_asn)}"
+    local_neighbor = local_link_ip(peer) or "<our-link-local>"
+    peer_ipv4 = peer.peer_dn42_ipv4 or "<your-dn42-ipv4>"
+    peer_ipv6 = peer.peer_dn42_ipv6 or "<your-dn42-ipv6>"
     our_public_key = node.wg_public_key or "<our-wireguard-public-key>"
+    bgp_extension_text = "enabled" if getattr(peer, "bgp_extended", True) else "disabled"
     return f"""# Generated dn42 peer config for AS{peer.asn} on node {node.name}
 
 [Interface]
@@ -107,10 +88,13 @@ AllowedIPs = 10.0.0.0/8, 172.20.0.0/14, 172.31.0.0/16, fd00::/8, fe80::/64
 PersistentKeepalive = 25
 
 # BGP
-# Neighbor ASN: {local_asn}
+# Neighbor ASN: {local_asn_display}
 # Neighbor IP: {local_neighbor}
 # Your ASN: {peer.asn}
 # Our side will expect your BGP neighbor address: {peer_link_ip(peer)}
+# Your DN42 IPv4: {peer_ipv4}
+# Your DN42 IPv6: {peer_ipv6}
+# BGP extensions: {bgp_extension_text}
 """
 
 
@@ -118,8 +102,6 @@ def render_wireguard_peer_config(
     peer: PeerRequest, node: Node, private_key_placeholder: str
 ) -> str:
     listen_port = wireguard_listen_port(peer.asn)
-    # The peer's endpoint is optional: when blank, omit the Endpoint line so wg-quick waits for the
-    # peer to dial us (we are the listener). 對端端點可留空,留空時省略 Endpoint 行,改由對端撥入。
     endpoint_line = f"Endpoint = {peer.endpoint}\n" if peer.endpoint.strip() else ""
     return f"""# Generated by dn42 Autopeer for request {peer.id}
 # AS{peer.asn} on node {node.name}
@@ -142,24 +124,29 @@ def render_bird_peer_config(peer: PeerRequest, node: Node, local_asn: str) -> st
     local_asn_number = normalize_asn_number(local_asn)
     peer_asn_number = normalize_asn_number(peer.asn)
     protocol_name = peer_protocol_name(peer, node)
-    # A link-local (fe80::) neighbor must carry the %interface scope so BIRD knows which link to
-    # reach it on; a ULA (fd00::/8) neighbor is globally addressable and must NOT carry a scope.
-    # link-local 鄰居需帶 %介面 scope;ULA 鄰居全域可達,不可帶 scope。
     scope = f"%{protocol_name}" if is_link_local(peer.peer_link_address) else ""
-    return f"""# Generated by dn42 Autopeer for request {peer.id}
-# BIRD2 peer snippet based on the dn42 wiki MP-BGP over IPv6 template.
-# Requires a global template named `dnpeers` with local as {local_asn_number}.
+    extended_enabled = getattr(peer, "bgp_extended", True)
 
-protocol bgp {protocol_name} from dnpeers {{
-  enable extended messages on;
-  neighbor {peer_link_ip(peer)}{scope} as {peer_asn_number};
-  source address {local_link_ip(peer)};
-  direct;
-  ipv4 {{
-    extended next hop on;
-  }};
-}}
-"""
+    lines = [
+        f"# Generated by dn42 Autopeer for request {peer.id}",
+        "# BIRD2 peer snippet based on the dn42 wiki MP-BGP over IPv6 template.",
+        f"# Requires a global template named `dnpeers` with local as {local_asn_number}.",
+        "",
+        f"protocol bgp {protocol_name} from dnpeers {{",
+    ]
+    if extended_enabled:
+        lines.append("  enable extended messages on;")
+    lines.extend(
+        [
+            f"  neighbor {peer_link_ip(peer)}{scope} as {peer_asn_number};",
+            f"  source address {local_link_ip(peer)};",
+            "  direct;",
+        ]
+    )
+    if extended_enabled:
+        lines.extend(["  ipv4 {", "    extended next hop on;", "  };"])
+    lines.append("}")
+    return "\n".join(lines) + "\n"
 
 
 def render_operator_config(peer: PeerRequest, node: Node, local_asn: str = "<our-asn>") -> str:

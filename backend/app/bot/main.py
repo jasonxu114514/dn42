@@ -82,7 +82,12 @@ class CreatePeer(StatesGroup):
     node = State()
     endpoint = State()
     public_key = State()
+    dn42_ipv4 = State()
+    dn42_ipv6 = State()
+    link_local = State()
     mtu = State()
+    bgp_extended = State()
+    confirming = State()
 
 
 class EditPeer(StatesGroup):
@@ -247,6 +252,22 @@ def parse_mtu(text: str | None, *, allow_keep: bool = False) -> int | None:
     return normalize_wireguard_mtu(value)
 
 
+def parse_optional_value(text: str | None) -> str:
+    value = (text or "").strip()
+    if value.lower() in {"", "skip", "none", "-"}:
+        return ""
+    return value
+
+
+def parse_yes_no(text: str | None) -> bool | None:
+    value = (text or "").strip().lower()
+    if value in {"", "yes", "y", "on", "enable", "enabled", "true", "1", "default", "skip"}:
+        return True
+    if value in {"no", "n", "off", "disable", "disabled", "false", "0"}:
+        return False
+    return None
+
+
 def peer_mtu(peer: dict) -> int:
     return int(peer.get("wg_mtu") or DEFAULT_WIREGUARD_MTU)
 
@@ -320,17 +341,39 @@ def peering_info_lines(info: dict) -> str:
 
     我方端點／公鑰／隧道內位址,供對端填入自己的 WireGuard 與 BGP 設定。
     """
+    asn = info.get("asn", "")
+    asn_display = f"AS{asn}" if asn and asn != "<our-asn>" else asn
     return (
-        f"our endpoint:  {info.get('endpoint', '')}\n"
-        f"our pubkey:    {info.get('public_key', '')}\n"
-        f"our tunnel IP: {info.get('tunnel_ip', '')}  (your BGP neighbor)\n"
+        f"ASN: {asn_display}\n"
+        f"IPv4: {info.get('ipv4') or '-'}\n"
+        f"IPv6: {info.get('ipv6') or '-'}\n"
+        f"Link-local: {info.get('link_local', '')}\n\n"
+        f"Endpoint: {info.get('endpoint', '')}\n\n"
+        f"WireGuard Public Key: {info.get('public_key', '')}\n"
         f"wireguard MTU: {info.get('mtu', DEFAULT_WIREGUARD_MTU)}"
     )
 
 
 def peering_info_text(info: dict) -> str:
     """The our-side block shown after a successful deploy: a caption plus the parameters."""
-    return "Configure your side with our details:\n" + peering_info_lines(info)
+    return "Use these settings to configure your interface:\n" + peering_info_lines(info)
+
+
+def peer_preview_text(data: dict) -> str:
+    peering = data.get("peering", {})
+    return (
+        "Review this peer before deployment.\n\n"
+        "Interface helper:\n"
+        f"{peering_info_lines(peering)}\n\n"
+        "Your submitted details:\n"
+        f"Node: {data.get('node', '')}\n"
+        f"Endpoint: {data.get('endpoint') or '- (you dial us)'}\n"
+        f"DN42 IPv4: {data.get('peer_dn42_ipv4') or '-'}\n"
+        f"DN42 IPv6: {data.get('peer_dn42_ipv6') or '-'}\n"
+        f"BGP neighbor address: {data.get('peer_link_address') or '-'}\n"
+        f"BGP extensions: {'enabled' if data.get('bgp_extended') else 'disabled'}\n\n"
+        "Send 'yes' to create it, or /cancel."
+    )
 
 
 async def send_peer_result(message: Message, action: str, result: dict) -> None:
@@ -562,6 +605,13 @@ async def peers_cmd(message: Message) -> None:
         lines = [f"=== {peer['node']} (AS{peer['asn']}) [{label}] ==="]
         if peer.get("endpoint"):
             lines.append(f"your endpoint: {peer['endpoint']}")
+        if peer.get("peer_dn42_ipv4"):
+            lines.append(f"your DN42 IPv4: {peer['peer_dn42_ipv4']}")
+        if peer.get("peer_dn42_ipv6"):
+            lines.append(f"your DN42 IPv6: {peer['peer_dn42_ipv6']}")
+        if peer.get("peer_link_address"):
+            lines.append(f"your link-local: {peer['peer_link_address']}")
+        lines.append(f"BGP extensions: {'enabled' if peer.get('bgp_extended') else 'disabled'}")
         if peer.get("peering"):
             lines.append(peering_info_lines(peer["peering"]))
         else:
@@ -860,6 +910,33 @@ async def create_key_step(message: Message, state: FSMContext) -> None:
         )
         return
     await state.update_data(wg_public_key=key)
+    await state.set_state(CreatePeer.dn42_ipv4)
+    await message.answer("Your DN42 IPv4 address, or send 'skip'.")
+
+
+@dp.message(CreatePeer.dn42_ipv4)
+async def create_dn42_ipv4_step(message: Message, state: FSMContext) -> None:
+    if await reject_if_command(message, "create"):
+        return
+    await state.update_data(peer_dn42_ipv4=parse_optional_value(message.text))
+    await state.set_state(CreatePeer.dn42_ipv6)
+    await message.answer("Your DN42 IPv6 address, or send 'skip'.")
+
+
+@dp.message(CreatePeer.dn42_ipv6)
+async def create_dn42_ipv6_step(message: Message, state: FSMContext) -> None:
+    if await reject_if_command(message, "create"):
+        return
+    await state.update_data(peer_dn42_ipv6=parse_optional_value(message.text))
+    await state.set_state(CreatePeer.link_local)
+    await message.answer("Your link-local/BGP address (e.g. fe80::99), or send 'skip'.")
+
+
+@dp.message(CreatePeer.link_local)
+async def create_link_local_step(message: Message, state: FSMContext) -> None:
+    if await reject_if_command(message, "create"):
+        return
+    await state.update_data(peer_link_address=parse_optional_value(message.text))
     await state.set_state(CreatePeer.mtu)
     await message.answer(
         f"WireGuard MTU ({MIN_WIREGUARD_MTU}-{MAX_WIREGUARD_MTU}). "
@@ -876,18 +953,60 @@ async def create_mtu_step(message: Message, state: FSMContext) -> None:
     except ValueError as exc:
         await message.answer(f"{exc}. Try again or /cancel.")
         return
+    await state.update_data(wg_mtu=mtu)
+    await state.set_state(CreatePeer.bgp_extended)
+    await message.answer(
+        "Enable BGP extensions (multiprotocol BGP, extended nexthop)? "
+        "Send yes/no, or default for yes."
+    )
+
+
+@dp.message(CreatePeer.bgp_extended)
+async def create_bgp_extended_step(message: Message, state: FSMContext) -> None:
+    if await reject_if_command(message, "create"):
+        return
+    bgp_extended = parse_yes_no(message.text)
+    if bgp_extended is None:
+        await message.answer("Please send yes or no, or /cancel.")
+        return
+    await state.update_data(bgp_extended=bgp_extended)
     data = await state.get_data()
-    await state.clear()
     payload = {
         "telegram_user_id": str(message.from_user.id),
         "node": data["node"],
         "endpoint": data["endpoint"],
         "wg_public_key": data["wg_public_key"],
-        "wg_mtu": mtu,
+        "peer_dn42_ipv4": data.get("peer_dn42_ipv4", ""),
+        "peer_dn42_ipv6": data.get("peer_dn42_ipv6", ""),
+        "peer_link_address": data.get("peer_link_address", ""),
+        "wg_mtu": data["wg_mtu"],
+        "bgp_extended": data["bgp_extended"],
     }
+    preview = await call_backend(
+        message,
+        backend.post("/api/telegram/peer/preview", payload),
+        error_prefix="Preview failed",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    if preview is None:
+        return
+    await state.update_data(create_payload=payload)
+    await state.set_state(CreatePeer.confirming)
+    await message.answer(format_block(peer_preview_text(preview)), parse_mode="Markdown")
+
+
+@dp.message(CreatePeer.confirming)
+async def create_confirm_step(message: Message, state: FSMContext) -> None:
+    if await reject_if_command(message, "create"):
+        return
+    if (message.text or "").strip().lower() not in {"yes", "y"}:
+        await message.answer("Not confirmed. Send 'yes' to create it, or /cancel.")
+        return
+    data = await state.get_data()
+    await state.clear()
     result = await call_backend(
         message,
-        backend.post("/api/telegram/peer/create", payload),
+        backend.post("/api/telegram/peer/create", data["create_payload"]),
         error_prefix="Create failed",
         reply_markup=ReplyKeyboardRemove(),
     )

@@ -97,9 +97,15 @@ BIRD snippets.
 | Interface/config/BIRD protocol name | `DN42_` + last 4 digits | `DN42_0090` |
 | Peer link-local address | `fe80::<asn-suffix>` | `fe80::90` |
 | WireGuard MTU | User-editable, default `1420`, range `1280-9000` | `1420` |
+| BGP extensions | Enabled by default; emits extended messages and IPv4 extended nexthop | `on` |
 
 The host part of our endpoint is taken from the node's public address registered in the admin panel.
 The backend adds the ASN-derived WireGuard listen port.
+
+Peer creation now asks for DN42 IPv4, DN42 IPv6, and link-local/BGP address separately. Blank
+address fields are skipped, but at least one of the three must be provided. If the link-local/BGP
+address is blank, the backend derives the traditional `fe80::<asn-suffix>` neighbor before showing
+the confirmation step.
 
 Generated WireGuard configs include the MTU in `[Interface]`:
 
@@ -260,9 +266,10 @@ key.
 | `/admin/users` | Manage users and Telegram bindings. |
 | `/admin/lg-log` | Audit log for looking-glass queries. |
 
-Both the New Peer form and the admin peer form let the operator set WireGuard MTU; the admin form
-can also correct addresses and redeploy. Disabled nodes are hidden from the public site and the
-looking glass.
+Both the New Peer form and the admin peer form collect DN42 IPv4, DN42 IPv6, link-local/BGP address,
+WireGuard MTU, and the BGP extension switch. The Web portal shows a confirmation page before
+creating the peer; the admin form can also correct addresses and redeploy. Disabled nodes are hidden
+from the public site and the looking glass.
 
 ## Telegram Bot
 
@@ -282,9 +289,11 @@ Commands:
 /cancel       Abort the current guided action
 ```
 
-For `/create`, the bot asks for node, endpoint (send `skip` for none), public key, and MTU. Sending
-`default` at the MTU step uses `1420`. For `/edit`, sending `keep` keeps the current MTU. Peers are
-picked from a numbered menu rather than by id.
+For `/create`, the bot asks for node, endpoint (send `skip` for none), public key, DN42 IPv4, DN42
+IPv6, link-local/BGP address, MTU, and whether BGP extensions should stay enabled. It shows a
+confirmation block before creating the peer. Sending `default` at the MTU step uses `1420`. For
+`/edit`, sending `keep` keeps the current MTU. Peers are picked from a numbered menu rather than by
+id.
 
 ## Agent and BIRD
 
@@ -318,7 +327,9 @@ template bgp dnpeers {
 }
 ```
 
-Adjust the template to your routing policy before production use.
+Adjust the template to your routing policy before production use. When a peer's BGP extension switch
+is enabled, the generated snippet includes `enable extended messages on;` and an IPv4 block with
+`extended next hop on;`. Turning the switch off omits those lines.
 
 The full agent API is documented in [docs/agent-api.md](docs/agent-api.md). Authentication details
 are documented in [docs/auth-flow.md](docs/auth-flow.md).

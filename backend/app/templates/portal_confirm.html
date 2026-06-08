@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% from "macros.html" import page_header, copy_button %}
+{% block title %}Confirm Peer - {{ settings.app_name }}{% endblock %}
+{% block content %}
+<div class="card">
+  {{ page_header("Confirm Peer", "Review the settings before this peer is deployed.") }}
+  <form method="post" action="/portal/peers">
+    <input type="hidden" name="node_id" value="{{ node.id }}">
+    <input type="hidden" name="endpoint" value="{{ values.endpoint }}">
+    <input type="hidden" name="wg_public_key" value="{{ values.wg_public_key }}">
+    <input type="hidden" name="wg_mtu" value="{{ values.wg_mtu }}">
+    <input type="hidden" name="peer_dn42_ipv4" value="{{ values.peer_dn42_ipv4 }}">
+    <input type="hidden" name="peer_dn42_ipv6" value="{{ values.peer_dn42_ipv6 }}">
+    <input type="hidden" name="peer_link_address" value="{{ values.peer_link_address }}">
+    <input type="hidden" name="bgp_extended" value="{{ 1 if values.bgp_extended else 0 }}">
+
+    <div class="split-2">
+      <section>
+        <h2>Interface helper</h2>
+        <p class="muted">Use these settings to configure your interface.</p>
+        <div class="kv">
+          <div class="kv-row"><span class="kv-key">ASN</span><span class="kv-val mono">{{ "AS" ~ peering.asn if peering.asn != "<our-asn>" else peering.asn }}</span></div>
+          <div class="kv-row"><span class="kv-key">IPv4</span><span class="kv-val mono">{{ peering.ipv4 or "-" }}</span>{% if peering.ipv4 %}{{ copy_button(peering.ipv4) }}{% endif %}</div>
+          <div class="kv-row"><span class="kv-key">IPv6</span><span class="kv-val mono">{{ peering.ipv6 or "-" }}</span>{% if peering.ipv6 %}{{ copy_button(peering.ipv6) }}{% endif %}</div>
+          <div class="kv-row"><span class="kv-key">Link-local</span><span class="kv-val mono">{{ peering.link_local }}</span>{{ copy_button(peering.link_local) }}</div>
+          <div class="kv-row"><span class="kv-key">Endpoint</span><span class="kv-val mono">{{ peering.endpoint }}</span>{{ copy_button(peering.endpoint) }}</div>
+          <div class="kv-row"><span class="kv-key">WireGuard Public Key</span><span class="kv-val mono">{{ peering.public_key }}</span>{{ copy_button(peering.public_key) }}</div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Your submitted details</h2>
+        <div class="kv">
+          <div class="kv-row"><span class="kv-key">Node</span><span class="kv-val">{{ node.name }}{% if node.location %} - {{ node.location }}{% endif %}</span></div>
+          <div class="kv-row"><span class="kv-key">Endpoint</span><span class="kv-val mono">{{ values.endpoint or "- (you dial us)" }}</span></div>
+          <div class="kv-row"><span class="kv-key">DN42 IPv4</span><span class="kv-val mono">{{ values.peer_dn42_ipv4 or "-" }}</span></div>
+          <div class="kv-row"><span class="kv-key">DN42 IPv6</span><span class="kv-val mono">{{ values.peer_dn42_ipv6 or "-" }}</span></div>
+          <div class="kv-row"><span class="kv-key">BGP neighbor address</span><span class="kv-val mono">{{ values.peer_link_address }}</span></div>
+          <div class="kv-row"><span class="kv-key">WireGuard MTU</span><span class="kv-val mono">{{ values.wg_mtu }}</span></div>
+          <div class="kv-row"><span class="kv-key">BGP extensions</span><span class="kv-val mono">{{ "enabled" if values.bgp_extended else "disabled" }}</span></div>
+        </div>
+      </section>
+    </div>
+
+    <div class="row-actions" style="margin-top:18px">
+      <button type="submit" class="btn-primary">Create peer</button>
+      <a class="btn btn-ghost" href="/portal/new">Back</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

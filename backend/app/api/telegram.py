@@ -22,8 +22,8 @@ from app.db.models import Node, PeerRequest
 from app.db.session import get_db
 from app.lg.client import NodeClient
 from app.lg.summary import summarize_peer_bird, summarize_wireguard
-from app.peer.config import peer_protocol_name, peering_info
-from app.peer.service import create_peer, delete_peer, derive_peer_link_address, update_peer
+from app.peer.config import node_effective_asn, peer_protocol_name, peering_info
+from app.peer.service import create_peer, delete_peer, preview_peer, update_peer
 from app.peer.validation import MAX_WIREGUARD_MTU, MIN_WIREGUARD_MTU, normalize_asn_number
 
 router = APIRouter(prefix="/api/telegram", tags=["telegram"])
@@ -67,7 +67,25 @@ class PeerCreateRequest(BaseModel):
     node: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
     endpoint: str = Field(default="", max_length=255)
     wg_public_key: str = Field(min_length=1, max_length=128)
+    peer_dn42_ipv4: str = Field(default="", max_length=64)
+    peer_dn42_ipv6: str = Field(default="", max_length=64)
+    peer_link_address: str = Field(default="", max_length=128)
     wg_mtu: int | None = Field(default=None, ge=MIN_WIREGUARD_MTU, le=MAX_WIREGUARD_MTU)
+    bgp_extended: bool = True
+
+
+class PeerPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    telegram_user_id: str = Field(pattern=r"^\d{1,20}$")
+    node: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    endpoint: str = Field(default="", max_length=255)
+    wg_public_key: str = Field(min_length=1, max_length=128)
+    peer_dn42_ipv4: str = Field(default="", max_length=64)
+    peer_dn42_ipv6: str = Field(default="", max_length=64)
+    peer_link_address: str = Field(default="", max_length=128)
+    wg_mtu: int | None = Field(default=None, ge=MIN_WIREGUARD_MTU, le=MAX_WIREGUARD_MTU)
+    bgp_extended: bool = True
 
 
 class PeerEditRequest(BaseModel):
@@ -77,7 +95,11 @@ class PeerEditRequest(BaseModel):
     peer_id: str = Field(min_length=1, max_length=36)
     endpoint: str = Field(default="", max_length=255)
     wg_public_key: str = Field(min_length=1, max_length=128)
+    peer_dn42_ipv4: str | None = Field(default=None, max_length=64)
+    peer_dn42_ipv6: str | None = Field(default=None, max_length=64)
+    peer_link_address: str | None = Field(default=None, max_length=128)
     wg_mtu: int | None = Field(default=None, ge=MIN_WIREGUARD_MTU, le=MAX_WIREGUARD_MTU)
+    bgp_extended: bool | None = None
 
 
 class PeerDeleteRequest(BaseModel):
@@ -253,7 +275,11 @@ def telegram_peer_status(telegram_user_id: str, db: Session = Depends(get_db)) -
                 "node": peer.node.name,
                 "status": peer.status,
                 "endpoint": peer.endpoint,
+                "peer_dn42_ipv4": peer.peer_dn42_ipv4,
+                "peer_dn42_ipv6": peer.peer_dn42_ipv6,
+                "peer_link_address": peer.peer_link_address,
                 "wg_mtu": peer.wg_mtu,
+                "bgp_extended": peer.bgp_extended,
                 "created_at": peer.created_at.isoformat(),
             }
             for peer in peers
@@ -282,16 +308,22 @@ def telegram_nodes(db: Session = Depends(get_db)) -> dict[str, Any]:
 
 
 def _peer_summary(peer: PeerRequest) -> dict[str, Any]:
+    local_asn = node_effective_asn(peer.node, get_settings().local_asn) or "<our-asn>"
     return {
         "id": peer.id,
         "node": peer.node.name,
         "asn": peer.asn,
         "deploy_status": peer.deploy_status,
         "deploy_output": peer.deploy_output,
+        "endpoint": peer.endpoint,
+        "peer_dn42_ipv4": peer.peer_dn42_ipv4,
+        "peer_dn42_ipv6": peer.peer_dn42_ipv6,
+        "peer_link_address": peer.peer_link_address,
+        "bgp_extended": peer.bgp_extended,
         "wg_mtu": peer.wg_mtu,
         # The "our side" details the peer needs to configure their end; the bot shows these once
         # the deploy succeeds. 部署成功後 bot 會把這些「我方」參數回給使用者設定對端。
-        "peering": peering_info(peer, peer.node),
+        "peering": peering_info(peer, peer.node, local_asn),
     }
 
 
@@ -303,6 +335,47 @@ def _owned_peer(db: Session, telegram_user_id: str, peer_id: str) -> PeerRequest
     if peer is None or peer.user_id != user.id:
         raise HTTPException(status_code=404, detail="Peer not found")
     return peer
+
+
+@router.post("/peer/preview", dependencies=[Depends(require_bot_secret)])
+def telegram_peer_preview(
+    payload: PeerPreviewRequest, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    settings = get_settings()
+    user = get_user_by_telegram(db, payload.telegram_user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Telegram account is not verified")
+    node = db.query(Node).filter(Node.name == payload.node, Node.enabled.is_(True)).one_or_none()
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    try:
+        preview = preview_peer(
+            user=user,
+            node=node,
+            endpoint=payload.endpoint,
+            wg_public_key=payload.wg_public_key,
+            wg_mtu=payload.wg_mtu,
+            peer_dn42_ipv4=payload.peer_dn42_ipv4,
+            peer_dn42_ipv6=payload.peer_dn42_ipv6,
+            peer_link_address=payload.peer_link_address,
+            bgp_extended=payload.bgp_extended,
+            settings=settings,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    values = preview["values"]
+    return {
+        "ok": True,
+        "node": node.name,
+        "asn": user.primary_asn,
+        "endpoint": values.endpoint,
+        "wg_mtu": values.wg_mtu,
+        "peer_dn42_ipv4": values.peer_dn42_ipv4,
+        "peer_dn42_ipv6": values.peer_dn42_ipv6,
+        "peer_link_address": values.peer_link_address,
+        "bgp_extended": values.bgp_extended,
+        "peering": preview["peering"],
+    }
 
 
 @router.post("/peer/create", dependencies=[Depends(require_bot_secret)])
@@ -317,7 +390,6 @@ def telegram_peer_create(
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
     try:
-        peer_link_address = derive_peer_link_address(user.primary_asn)
         peer = create_peer(
             db,
             user=user,
@@ -325,7 +397,10 @@ def telegram_peer_create(
             endpoint=payload.endpoint,
             wg_public_key=payload.wg_public_key,
             wg_mtu=payload.wg_mtu,
-            peer_link_address=peer_link_address,
+            peer_dn42_ipv4=payload.peer_dn42_ipv4,
+            peer_dn42_ipv6=payload.peer_dn42_ipv6,
+            peer_link_address=payload.peer_link_address,
+            bgp_extended=payload.bgp_extended,
             settings=settings,
         )
     except ValueError as exc:
@@ -338,6 +413,13 @@ def telegram_peer_create(
 def telegram_peer_edit(payload: PeerEditRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
     settings = get_settings()
     peer = _owned_peer(db, payload.telegram_user_id, payload.peer_id)
+    peer_dn42_ipv4 = (
+        payload.peer_dn42_ipv4 if payload.peer_dn42_ipv4 is not None else peer.peer_dn42_ipv4
+    )
+    peer_dn42_ipv6 = (
+        payload.peer_dn42_ipv6 if payload.peer_dn42_ipv6 is not None else peer.peer_dn42_ipv6
+    )
+    bgp_extended = payload.bgp_extended if payload.bgp_extended is not None else peer.bgp_extended
     try:
         update_peer(
             db,
@@ -347,7 +429,14 @@ def telegram_peer_edit(payload: PeerEditRequest, db: Session = Depends(get_db)) 
             wg_public_key=payload.wg_public_key,
             wg_mtu=payload.wg_mtu,
             local_link_address=peer.local_link_address,
-            peer_link_address=peer.peer_link_address,
+            peer_link_address=(
+                payload.peer_link_address
+                if payload.peer_link_address is not None
+                else peer.peer_link_address
+            ),
+            peer_dn42_ipv4=peer_dn42_ipv4,
+            peer_dn42_ipv6=peer_dn42_ipv6,
+            bgp_extended=bgp_extended,
             status=peer.status,
             settings=settings,
             redeploy=True,
@@ -410,9 +499,15 @@ async def telegram_status(
                 "asn": peer.asn,
                 "status": peer.status,
                 "endpoint": peer.endpoint,
+                "peer_dn42_ipv4": peer.peer_dn42_ipv4,
+                "peer_dn42_ipv6": peer.peer_dn42_ipv6,
+                "peer_link_address": peer.peer_link_address,
+                "bgp_extended": peer.bgp_extended,
                 "wg_mtu": peer.wg_mtu,
                 "deploy_status": peer.deploy_status,
-                "peering": peering_info(peer, node),
+                "peering": peering_info(
+                    peer, node, node_effective_asn(node, get_settings().local_asn) or "<our-asn>"
+                ),
             }
         )
         fetches.append(fetch(node, peer_protocol_name(peer, node)))

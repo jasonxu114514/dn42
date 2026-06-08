@@ -1,15 +1,15 @@
 {% extends "base.html" %}
 {% from "macros.html" import page_header %}
-{% block title %}New Peer · {{ settings.app_name }}{% endblock %}
+{% block title %}New Peer - {{ settings.app_name }}{% endblock %}
 {% block content %}
 <div class="card">
-  {{ page_header("New Peer", "Pick a node and paste your WireGuard details. We validate, then deploy automatically.") }}
+  {{ page_header("New Peer", "Pick a node and paste your WireGuard details. You will confirm the settings before deployment.") }}
   {% if nodes %}
-  <form method="post" action="/portal/peers" class="form-grid">
+  <form method="post" action="/portal/peers/confirm" class="form-grid">
     <label class="field">Node
       <select name="node_id" required>
         {% for node in nodes %}
-          <option value="{{ node.id }}">{{ node.name }}{% if node.location %} — {{ node.location }}{% endif %}</option>
+          <option value="{{ node.id }}">{{ node.name }}{% if node.location %} - {{ node.location }}{% endif %}</option>
         {% endfor %}
       </select>
     </label>
@@ -17,17 +17,27 @@
       <input name="wg_public_key" placeholder="44-char base64 key" required>
     </label>
     <label class="field">Your WireGuard endpoint <span class="muted">(optional)</span>
-      <input name="endpoint" placeholder="host:port — leave blank and your side dials us">
+      <input name="endpoint" placeholder="host:port (blank = peer dials us)">
     </label>
-    <label class="field">Your tunnel IP (AS{{ user.primary_asn }})
-      <input name="peer_link_address" value="{{ default_peer_address }}" placeholder="fe80::99 or a ULA (fd…)" required>
+    <label class="field">DN42 IPv4 <span class="muted">(optional)</span>
+      <input name="peer_dn42_ipv4" placeholder="172.20.x.y or 172.20.x.y/32">
+    </label>
+    <label class="field">DN42 IPv6 <span class="muted">(optional)</span>
+      <input name="peer_dn42_ipv6" placeholder="fd00::1 or fd00::1/128">
+    </label>
+    <label class="field">Link-local address <span class="muted">(optional)</span>
+      <input name="peer_link_address" placeholder="{{ default_peer_address or 'fe80::99' }} or a ULA">
     </label>
     <label class="field">WireGuard MTU
       <input name="wg_mtu" type="number" min="{{ wireguard_mtu_min }}" max="{{ wireguard_mtu_max }}" value="{{ default_wireguard_mtu }}" required>
     </label>
-    <button type="submit" class="btn-primary">Create peer</button>
+    <label class="checkbox-label">
+      <input type="checkbox" name="bgp_extended" value="1" checked>
+      BGP extensions
+    </label>
+    <button type="submit" class="btn-primary">Review peer</button>
   </form>
-  <p class="muted" style="margin-top:10px">Link-local (fe80::) is the default and works out of the box; a ULA (fd00::/8) is also accepted. Our side's address is derived to match.</p>
+  <p class="muted" style="margin-top:10px">Enter at least one of DN42 IPv4, DN42 IPv6, or link-local. Blank fields are skipped. BGP extensions enable multiprotocol BGP and extended nexthop.</p>
   {% else %}
   <div class="empty-state">No nodes are available right now. Please check back later.</div>
   {% endif %}

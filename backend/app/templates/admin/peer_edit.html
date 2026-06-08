@@ -31,11 +31,21 @@
       <input name="wg_mtu" type="number" min="{{ wireguard_mtu_min }}" max="{{ wireguard_mtu_max }}"
              value="{{ peer.wg_mtu or default_wireguard_mtu }}" required>
     </label>
+    <label class="field">Peer DN42 IPv4 <span class="muted">(optional)</span>
+      <input name="peer_dn42_ipv4" value="{{ peer.peer_dn42_ipv4 }}" placeholder="172.20.x.y or 172.20.x.y/32">
+    </label>
+    <label class="field">Peer DN42 IPv6 <span class="muted">(optional)</span>
+      <input name="peer_dn42_ipv6" value="{{ peer.peer_dn42_ipv6 }}" placeholder="fd00::1 or fd00::1/128">
+    </label>
     <label class="field">Our address
       <input name="local_link_address" value="{{ peer.local_link_address }}" required>
     </label>
-    <label class="field">Peer address
-      <input name="peer_link_address" value="{{ peer.peer_link_address }}" required>
+    <label class="field">Peer link-local address <span class="muted">(optional)</span>
+      <input name="peer_link_address" value="{{ peer.peer_link_address }}" placeholder="fe80::99 or a ULA">
+    </label>
+    <label class="checkbox-label">
+      <input type="checkbox" name="bgp_extended" value="1" {% if peer.bgp_extended %}checked{% endif %}>
+      BGP extensions
     </label>
     <label class="field">Status
       <select name="status">

@@ -1,4 +1,8 @@
-"""FindNOC integration: map a Telegram UID to the dn42 ASN(s) it controls."""
+"""FindNOC integration: map a Telegram UID to the dn42 ASN(s) it controls.
+
+FindNOC authenticates with an API token passed as the query parameter ``token``. Because the
+token lives in the request URL, this module never logs request URLs or raw urllib exception text.
+"""
 
 import asyncio
 import json
@@ -6,6 +10,7 @@ import logging
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 
 from app.config import Settings
 from app.peer.validation import normalize_asn_number
@@ -19,19 +24,31 @@ class FindNocError(ValueError):
     """A FindNOC request failed: misconfig, rejected token, upstream, or transport error."""
 
 
+@dataclass(frozen=True)
 class FindNocResponse:
-    def __init__(self, status_code: int, body: str) -> None:
-        self.status_code = status_code
-        self.body = body
+    status_code: int
+    body: str
 
     def json(self) -> object:
         return json.loads(self.body)
 
 
+def _url(path: str, params: dict[str, str], settings: Settings) -> str:
+    base = settings.findnoc_api_url.strip().rstrip("/")
+    if not base:
+        raise FindNocError("FindNOC API URL is not configured")
+    return f"{base}/{path}?{urllib.parse.urlencode(params)}"
+
+
 def _get_sync(path: str, params: dict[str, str], settings: Settings) -> FindNocResponse:
-    base = settings.findnoc_api_url.rstrip("/")
-    query = urllib.parse.urlencode(params)
-    request = urllib.request.Request(f"{base}/{path}?{query}", method="GET")
+    request = urllib.request.Request(
+        _url(path, params, settings),
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "dn42-autopeer-findnoc/0.1",
+        },
+        method="GET",
+    )
     try:
         with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
             body = response.read().decode("utf-8")
@@ -39,9 +56,9 @@ def _get_sync(path: str, params: dict[str, str], settings: Settings) -> FindNocR
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         return FindNocResponse(exc.code, body)
-    except (OSError, TimeoutError) as exc:
+    except (OSError, TimeoutError, ValueError) as exc:
         logger.warning("FindNOC %s request failed: %s", path, type(exc).__name__)
-        raise FindNocError("FindNOC is unreachable") from exc
+        raise FindNocError("FindNOC is unreachable") from None
 
 
 async def _get(path: str, params: dict[str, str], settings: Settings) -> FindNocResponse:

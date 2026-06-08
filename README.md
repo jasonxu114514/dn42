@@ -125,24 +125,16 @@ PostUp = ip addr add fe80::1/64 dev %i
 Linux / macOS:
 
 ```sh
-cd backend
-cp .env.example .env
-python3.11 -m venv .venv
-. .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e .
-cd ..
+cp backend/.env.example backend/.env
+python3 -m pip install -r requirements.txt
 python3 start.py
 ```
 
 Windows PowerShell:
 
 ```powershell
-cd backend
-Copy-Item .env.example .env
-python -m venv .venv
-.\.venv\Scripts\pip install -e .
-cd ..
+Copy-Item backend\.env.example backend\.env
+python -m pip install -r requirements.txt
 python start.py
 ```
 

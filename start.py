@@ -12,6 +12,9 @@ ROOT = Path(__file__).resolve().parent
 BACKEND_DIR = ROOT / "backend"
 ENV_FILE = BACKEND_DIR / ".env"
 
+BACKEND_MODULES = ["uvicorn", "fastapi", "sqlalchemy", "pydantic_settings"]
+BOT_MODULES = ["aiogram"]
+
 
 def parse_env(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
@@ -33,6 +36,49 @@ def backend_python() -> Path | str:
     else:
         candidate = BACKEND_DIR / ".venv" / "bin" / "python"
     return candidate if candidate.exists() else sys.executable
+
+
+def missing_modules(python: Path | str, modules: list[str]) -> list[str] | None:
+    if not modules:
+        return []
+    code = (
+        "import importlib.util, sys; "
+        "missing = [m for m in sys.argv[1:] if importlib.util.find_spec(m) is None]; "
+        "print('\\n'.join(missing)); "
+        "raise SystemExit(1 if missing else 0)"
+    )
+    result = subprocess.run(
+        [str(python), "-c", code, *modules],
+        cwd=BACKEND_DIR,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return []
+    if result.returncode == 1:
+        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    print(f"[error] Could not run backend Python: {python}")
+    print(result.stdout, end="")
+    return None
+
+
+def check_python_dependencies(python: Path | str, *, need_backend: bool, need_bot: bool) -> bool:
+    modules: list[str] = []
+    if need_backend:
+        modules.extend(BACKEND_MODULES)
+    if need_bot:
+        modules.extend(BOT_MODULES)
+    missing = missing_modules(python, modules)
+    if missing is None:
+        return False
+    if not missing:
+        return True
+    print(f"[error] Missing Python modules for {python}: {', '.join(missing)}")
+    print("[error] Install backend dependencies with:")
+    print(f"[error]   {python} -m pip install -r {ROOT / 'requirements.txt'}")
+    return False
 
 
 def print_checks(env: dict[str, str], *, strict_https: bool) -> None:
@@ -163,6 +209,11 @@ def main() -> int:
         return 1
 
     python = backend_python()
+    if not check_python_dependencies(
+        python, need_backend=not args.bot_only, need_bot=not args.backend_only
+    ):
+        return 1
+
     bind_host, bind_port = backend_bind(env, args.host, args.port)
     processes: list[subprocess.Popen[str]] = []
 

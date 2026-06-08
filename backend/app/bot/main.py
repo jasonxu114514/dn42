@@ -3,10 +3,11 @@ import json
 import random
 import re
 import secrets
+import urllib.error
+import urllib.request
 from collections.abc import Awaitable
 from typing import Any
 
-import httpx
 from aiogram import Bot, Dispatcher, F
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
@@ -41,37 +42,59 @@ NOT_LINKED_MSG = "Your Telegram account is not linked to a dn42 ASN yet. Use /lo
 
 
 class Backend:
-    """Backend HTTP client. Holds one pooled AsyncClient reused for the bot's lifetime."""
+    """Small stdlib HTTP client for the bot's backend API."""
 
     def __init__(self) -> None:
         self.base_url = settings.bot_backend_url.rstrip("/")
         self.headers = {"X-Backend-Secret": settings.telegram_backend_secret}
-        self._client: httpx.AsyncClient | None = None
 
-    def _http(self) -> httpx.AsyncClient:
-        # Created lazily so the client binds to the running event loop, then reused so every
-        # backend call shares one connection pool instead of opening a fresh connection.
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                base_url=self.base_url, headers=self.headers, timeout=30
-            )
-        return self._client
+    def _request_sync(
+        self, method: str, path: str, payload: dict[str, Any] | None = None, timeout: int = 30
+    ) -> dict[str, Any]:
+        data = None
+        headers = dict(self.headers)
+        if payload is not None:
+            data = json.dumps(payload).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(
+            f"{self.base_url}{path}", data=data, headers=headers, method=method
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                body = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise BackendStatusError(exc.code, body) from exc
+        except (OSError, TimeoutError) as exc:
+            raise BackendError(str(exc)) from exc
+        if not body:
+            return {}
+        try:
+            return json.loads(body)
+        except ValueError as exc:
+            raise BackendError("Backend returned a non-JSON response") from exc
 
     async def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        response = await self._http().post(path, json=payload, timeout=40)
-        response.raise_for_status()
-        return response.json()
+        return await asyncio.to_thread(self._request_sync, "POST", path, payload, 40)
 
     async def get(self, path: str) -> dict[str, Any]:
-        response = await self._http().get(path)
-        response.raise_for_status()
-        return response.json()
+        return await asyncio.to_thread(self._request_sync, "GET", path)
 
     async def aclose(self) -> None:
-        """Close the pooled client on shutdown. Safe to call even if it was never created."""
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+        return None
+
+
+class BackendError(RuntimeError):
+    """A backend API request failed before a valid HTTP response was available."""
+
+
+class BackendStatusError(BackendError):
+    """A backend API request returned a non-2xx status."""
+
+    def __init__(self, status_code: int, body: str) -> None:
+        super().__init__(f"HTTP {status_code}")
+        self.status_code = status_code
+        self.body = body
 
 
 backend = Backend()
@@ -165,13 +188,13 @@ def user_payload(message: Message) -> dict[str, str]:
     }
 
 
-def detail_of(exc: httpx.HTTPStatusError) -> str:
+def detail_of(exc: BackendStatusError) -> str:
     """Pull the FastAPI ``detail`` out of an error response, falling back to the raw body."""
     try:
-        payload = exc.response.json()
+        payload = json.loads(exc.body)
     except ValueError:
-        return exc.response.text
-    return str(payload.get("detail", exc.response.text))
+        return exc.body
+    return str(payload.get("detail", exc.body))
 
 
 async def call_backend(
@@ -189,13 +212,13 @@ async def call_backend(
     """
     try:
         return await request
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 404 and not_found_message is not None:
+    except BackendStatusError as exc:
+        if exc.status_code == 404 and not_found_message is not None:
             await message.answer(not_found_message, reply_markup=reply_markup)
         else:
             await message.answer(f"{error_prefix}: {detail_of(exc)}", reply_markup=reply_markup)
         return None
-    except httpx.HTTPError as exc:
+    except BackendError as exc:
         await message.answer(f"{error_prefix}: {exc}", reply_markup=reply_markup)
         return None
 
@@ -483,14 +506,14 @@ async def login_cmd(message: Message) -> None:
             "/api/telegram/findnoc/login",
             {**user_payload(message), "username": message.from_user.username},
         )
-    except httpx.HTTPStatusError as exc:
+    except BackendStatusError as exc:
         # 404 = not in FindNOC, 503 = FindNOC off/unavailable → both fall back to Kioubit.
-        if exc.response.status_code in (404, 503):
+        if exc.status_code in (404, 503):
             await kioubit_login(message)
         else:
             await message.answer(f"Login failed: {detail_of(exc)}")
         return
-    except httpx.HTTPError:
+    except BackendError:
         # Backend unreachable; the Kioubit path needs it too, but follow the standard flow.
         await kioubit_login(message)
         return
@@ -518,11 +541,11 @@ async def fnlogin_choose(callback: CallbackQuery) -> None:
                 "asn": asn,
             },
         )
-    except httpx.HTTPStatusError as exc:
+    except BackendStatusError as exc:
         await callback.answer()
         await callback.message.answer(f"Login failed: {detail_of(exc)}")
         return
-    except httpx.HTTPError as exc:
+    except BackendError as exc:
         await callback.answer()
         await callback.message.answer(f"Login failed: {exc}")
         return
@@ -714,9 +737,9 @@ async def render_lg(
             },
         )
         body = str(result.get("output", result))
-    except httpx.HTTPStatusError as exc:
+    except BackendStatusError as exc:
         body = f"Looking glass failed: {detail_of(exc)}"
-    except httpx.HTTPError as exc:
+    except BackendError as exc:
         body = f"Looking glass failed: {exc}"
     text = format_block(f"{lg_caption(query_type, target)} @ {node}\n\n{body}")
     try:

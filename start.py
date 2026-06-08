@@ -9,8 +9,8 @@ import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-BACKEND_DIR = ROOT / "backend"
-ENV_FILE = BACKEND_DIR / ".env"
+APP_DIR = ROOT / "app"
+ENV_FILE = ROOT / ".env"
 
 BACKEND_MODULES = ["uvicorn", "fastapi", "sqlalchemy", "pydantic_settings"]
 BOT_MODULES = ["aiogram"]
@@ -32,9 +32,9 @@ def parse_env(path: Path) -> dict[str, str]:
 
 def backend_python() -> Path | str:
     if os.name == "nt":
-        candidate = BACKEND_DIR / ".venv" / "Scripts" / "python.exe"
+        candidate = ROOT / ".venv" / "Scripts" / "python.exe"
     else:
-        candidate = BACKEND_DIR / ".venv" / "bin" / "python"
+        candidate = ROOT / ".venv" / "bin" / "python"
     return candidate if candidate.exists() else sys.executable
 
 
@@ -49,7 +49,7 @@ def missing_modules(python: Path | str, modules: list[str]) -> list[str] | None:
     )
     result = subprocess.run(
         [str(python), "-c", code, *modules],
-        cwd=BACKEND_DIR,
+        cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -86,7 +86,7 @@ def print_checks(env: dict[str, str], *, strict_https: bool) -> None:
     token = env.get("TELEGRAM_BOT_TOKEN", "")
 
     if not ENV_FILE.exists():
-        print(f"[check] Missing {ENV_FILE}. Copy backend/.env.example to backend/.env first.")
+        print(f"[check] Missing {ENV_FILE}. Copy .env.example to .env first.")
     if not token:
         print("[check] TELEGRAM_BOT_TOKEN is empty. Telegram bot will not start correctly.")
     if strict_https and not base_url.startswith("https://"):
@@ -130,7 +130,7 @@ def start_process(name: str, args: list[str | Path]) -> subprocess.Popen[str]:
 
     process = subprocess.Popen(
         [str(arg) for arg in args],
-        cwd=BACKEND_DIR,
+        cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -196,8 +196,8 @@ def main() -> int:
         # so the backend does not refuse to start. Never use --allow-http in production.
         os.environ["ALLOW_INSECURE_DEFAULTS"] = "1"
 
-    if not BACKEND_DIR.exists():
-        print(f"[error] Backend directory not found: {BACKEND_DIR}")
+    if not APP_DIR.exists():
+        print(f"[error] App package not found: {APP_DIR}")
         return 1
 
     env = parse_env(ENV_FILE)

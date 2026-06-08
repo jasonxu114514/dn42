@@ -11,11 +11,11 @@ __pycache__/
 autopeer.db
 
 # Go build output
-agent/agent
-agent/agent.exe
+/node
+/node.exe
 
-# Agent config (contains secrets; copy from agent/config.example.json)
-agent/config.json
+# Node config (contains secrets; copy from config.example.json)
+/config.json
 
 # OS/editor
 .DS_Store

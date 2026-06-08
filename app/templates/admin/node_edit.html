@@ -1,0 +1,85 @@
+﻿{% extends "admin/layout.html" %}
+{% from "macros.html" import page_header, copy_button, badge %}
+{% block title %}{{ node.name }} · Nodes · {{ settings.app_name }}{% endblock %}
+{% block admin %}
+{{ page_header("Node: " ~ node.name, "Edit this node, view its status, and manage its credentials.") }}
+<p><a class="btn btn-ghost btn-sm" href="/admin/nodes">← All nodes</a></p>
+
+<div class="card">
+  <h2>Details</h2>
+  <form method="post" action="/admin/nodes/{{ node.id }}/update" class="form-grid">
+    <label class="field">Name<input name="name" value="{{ node.name }}" required></label>
+    <label class="field">Location<input name="location" value="{{ node.location }}"></label>
+    <label class="field">Public address<input name="url" value="{{ node.url }}" placeholder="pop.example.net or 172.20.0.1" required></label>
+    <label class="field">ASN <span class="muted">(optional, defaults to LOCAL_ASN)</span><input name="asn" value="{{ node.asn }}" placeholder="4242420000"></label>
+    <label class="field">DN42 IPv4 <span class="muted">(optional)</span><input name="dn42_ipv4" value="{{ node.dn42_ipv4 }}" placeholder="172.20.0.1"></label>
+    <label class="field">DN42 IPv6 <span class="muted">(optional)</span><input name="dn42_ipv6" value="{{ node.dn42_ipv6 }}" placeholder="fd00::1"></label>
+    <label class="checkbox-label"><input type="checkbox" name="enabled" {% if node.enabled %}checked{% endif %}> Enabled</label>
+    <button type="submit" class="btn-primary">Save</button>
+  </form>
+  <p class="muted" style="margin-top:10px">Peers dial this IPv4/IPv6/domain over WireGuard; the listen port is derived from each peer's ASN. A disabled node is hidden from the public site and looking glass.</p>
+</div>
+
+<div class="card">
+  <h2>Status</h2>
+  <div class="kv">
+    <div class="kv-row">
+      <span class="kv-key">Connection</span>
+      <span class="online-state {{ 'is-online' if runtime.online else 'is-offline' }}">
+        <span class="online-dot" aria-hidden="true"></span>{{ "online" if runtime.online else "offline" }}
+      </span>
+    </div>
+    {% if runtime.last_seen_at %}
+    <div class="kv-row"><span class="kv-key">Last seen</span><span class="kv-val">{{ runtime.last_seen_at.strftime("%Y-%m-%d %H:%M") }} UTC</span></div>
+    {% endif %}
+    <div class="kv-row"><span class="kv-key">System</span><span class="kv-val">{{ runtime.system_summary }}</span></div>
+  </div>
+  {% if runtime.resource_metrics %}
+  <div class="resource-metrics">
+    {% for m in runtime.resource_metrics %}<span class="resource-metric"><span>{{ m.label }}</span>{{ m.value }}</span>{% endfor %}
+  </div>
+  {% endif %}
+  {% set sys = runtime.system %}
+  {% if sys.wireguard %}
+    <div class="status-label">WireGuard {{ badge("ok", "ok") if sys.wireguard.ok else badge("fail", "bad") }}</div>
+    <pre class="terminal node-status-output">{{ sys.wireguard.output or "(no output)" }}</pre>
+  {% endif %}
+  {% if sys.bird %}
+    <div class="status-label">BIRD {{ badge("ok", "ok") if sys.bird.ok else badge("fail", "bad") }}</div>
+    <pre class="terminal node-status-output">{{ sys.bird.output or "(no output)" }}</pre>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Credentials</h2>
+  <div class="kv">
+    <div class="kv-row">
+      <span class="kv-key">API token</span>
+      <span class="kv-val">{{ node.token }}</span>{{ copy_button(node.token) }}
+    </div>
+    <div class="kv-row">
+      <span class="kv-key">WireGuard public key</span>
+      <span class="kv-val">{{ node.wg_public_key or "—" }}</span>
+      {% if node.wg_public_key %}{{ copy_button(node.wg_public_key) }}{% endif %}
+    </div>
+  </div>
+  <div class="row-actions edit-actions">
+    <form method="post" action="/admin/nodes/{{ node.id }}/refresh-pubkey">
+      <button type="submit" class="btn-secondary btn-sm">Refresh key</button>
+    </form>
+    <form method="post" action="/admin/nodes/{{ node.id }}/reset-token"
+          data-confirm="Issue a new API token for {{ node.name }}? The node service must be reconfigured with the new token.">
+      <button type="submit" class="btn-secondary btn-sm">Reset token</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Danger zone</h2>
+  <form method="post" action="/admin/nodes/{{ node.id }}/delete"
+        data-confirm="Delete node {{ node.name }}? This cannot be undone.">
+    <button type="submit" class="btn-danger">Delete this node</button>
+  </form>
+</div>
+{% endblock %}
+

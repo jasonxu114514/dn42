@@ -1,4 +1,4 @@
-# Authentication Flow
+﻿# Authentication Flow
 
 Every peer operation starts from a verified dn42 ASN. The backend supports three login paths:
 
@@ -334,4 +334,5 @@ The cookie stores `user_id`; user details are loaded from the database on each r
 - The Telegram UID is trusted only because it comes from the bot process.
 - User-supplied Telegram JSON cannot grant ASN access without backend verification.
 - The backend is the trust boundary for peer creation.
-- Agents trust the backend and should not be exposed as public unauthenticated services.
+- Node services trust the backend and should not be exposed as public unauthenticated services.
+

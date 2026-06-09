@@ -8,13 +8,15 @@ import urllib.request
 from collections.abc import Awaitable
 from typing import Any
 
-from aiogram import Bot, Dispatcher, F
+from aiogram import Bot, Dispatcher, F, Router
+from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup, default_state
 from aiogram.types import (
     BotCommand,
+    BotCommandScopeAllGroupChats,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -100,6 +102,18 @@ class BackendStatusError(BackendError):
 backend = Backend()
 dp = Dispatcher()
 
+# Looking-glass diagnostics (/ping, /trace, /mtr, /route) are safe to run anywhere, so they live
+# on a router with no chat-type filter. Login, logout and peer management are account operations
+# that only make sense in a 1:1 chat (and would turn a group into a noisy wizard), so they are
+# gated to private chats. In a group, anything outside the looking glass simply isn't handled.
+# 看板診斷(/ping /trace /mtr /route)可在任何聊天執行;登入與對等管理屬帳號操作,僅限私訊。
+# 在群組中,看板以外的指令一律不處理(靜默忽略)。
+lg_router = Router(name="looking_glass")
+private_router = Router(name="account")
+
+private_router.message.filter(F.chat.type == ChatType.PRIVATE)
+private_router.callback_query.filter(F.message.chat.type == ChatType.PRIVATE)
+
 
 class CreatePeer(StatesGroup):
     node = State()
@@ -179,6 +193,12 @@ BOT_COMMANDS = [
     BotCommand(command="cancel", description="cancel all"),
     BotCommand(command="help", description="show this help"),
 ]
+
+# In group chats only the looking-glass commands are handled (see lg_router), so the "/" menu
+# there is narrowed to match — login/peer commands are not even offered. Derived from BOT_COMMANDS
+# so the descriptions stay in sync. 群組僅處理看板指令,故「/」選單只列出這四個。
+GROUP_COMMAND_NAMES = {"ping", "trace", "mtr", "route"}
+GROUP_BOT_COMMANDS = [c for c in BOT_COMMANDS if c.command in GROUP_COMMAND_NAMES]
 
 
 def user_payload(message: Message) -> dict[str, str]:
@@ -439,7 +459,7 @@ async def handle_endpoint_step(
 # --- Help & verification -------------------------------------------------------------------
 
 
-@dp.message(Command("start", "help"), default_state)
+@private_router.message(Command("start", "help"), default_state)
 async def help_cmd(message: Message) -> None:
     await message.answer(HELP_TEXT)
 
@@ -495,7 +515,7 @@ async def kioubit_login(message: Message) -> None:
     await message.answer("Open the app to verify your dn42 ASN:", reply_markup=keyboard)
 
 
-@dp.message(Command("login"), default_state)
+@private_router.message(Command("login"), default_state)
 async def login_cmd(message: Message) -> None:
     """Try FindNOC quick login first; fall back to the Kioubit Mini App when it can't be used.
 
@@ -527,7 +547,7 @@ async def login_cmd(message: Message) -> None:
     await message.answer(findnoc_success_text(data))
 
 
-@dp.callback_query(F.data.startswith("fnlogin:"))
+@private_router.callback_query(F.data.startswith("fnlogin:"))
 async def fnlogin_choose(callback: CallbackQuery) -> None:
     """Bind the ASN tapped from the multi-ASN FindNOC list; the backend re-verifies it."""
     asn = callback.data.split(":", 1)[1]
@@ -553,7 +573,7 @@ async def fnlogin_choose(callback: CallbackQuery) -> None:
     await callback.message.answer(findnoc_success_text(data))
 
 
-@dp.message(F.web_app_data)
+@private_router.message(F.web_app_data)
 async def web_app_data(message: Message) -> None:
     try:
         envelope = json.loads(message.web_app_data.data)
@@ -583,7 +603,7 @@ async def web_app_data(message: Message) -> None:
     )
 
 
-@dp.message(Command("logout"), default_state)
+@private_router.message(Command("logout"), default_state)
 async def logout_cmd(message: Message) -> None:
     result = await call_backend(
         message,
@@ -602,7 +622,7 @@ async def logout_cmd(message: Message) -> None:
 # --- Peer list & status --------------------------------------------------------------------
 
 
-@dp.message(Command("listpeers"), default_state)
+@private_router.message(Command("listpeers"), default_state)
 async def peers_cmd(message: Message) -> None:
     """List the caller's peers: one block per peer with its state, the our-side params to hand the
     other operator, and its live WireGuard + BGP status.
@@ -753,7 +773,7 @@ async def render_lg(
         pass
 
 
-@dp.callback_query(F.data.startswith("lg:"))
+@lg_router.callback_query(F.data.startswith("lg:"))
 async def lg_choose(callback: CallbackQuery, state: FSMContext) -> None:
     """Re-run the query on the tapped node and edit the message output in place.
 
@@ -789,22 +809,22 @@ async def lg_choose(callback: CallbackQuery, state: FSMContext) -> None:
     )
 
 
-@dp.message(Command("ping"), default_state)
+@lg_router.message(Command("ping"), default_state)
 async def ping_cmd(message: Message, state: FSMContext) -> None:
     await run_lg(message, state, "ping")
 
 
-@dp.message(Command("trace"), default_state)
+@lg_router.message(Command("trace"), default_state)
 async def trace_cmd(message: Message, state: FSMContext) -> None:
     await run_lg(message, state, "trace")
 
 
-@dp.message(Command("mtr"), default_state)
+@lg_router.message(Command("mtr"), default_state)
 async def mtr_cmd(message: Message, state: FSMContext) -> None:
     await run_lg(message, state, "mtr")
 
 
-@dp.message(Command("route"), default_state)
+@lg_router.message(Command("route"), default_state)
 async def route_cmd(message: Message, state: FSMContext) -> None:
     await run_lg(message, state, "route")
 
@@ -814,7 +834,7 @@ async def route_cmd(message: Message, state: FSMContext) -> None:
 # take precedence over (and can restart) an active wizard.
 
 
-@dp.message(Command("cancel"))
+@private_router.message(Command("cancel"))
 async def cancel_cmd(message: Message, state: FSMContext) -> None:
     if await state.get_state() is None:
         await message.answer("Nothing to cancel.", reply_markup=ReplyKeyboardRemove())
@@ -823,7 +843,7 @@ async def cancel_cmd(message: Message, state: FSMContext) -> None:
     await message.answer("Cancelled.", reply_markup=ReplyKeyboardRemove())
 
 
-@dp.message(Command("create"))
+@private_router.message(Command("create"))
 async def create_cmd(message: Message, state: FSMContext) -> None:
     await state.clear()
     # Confirm the account is verified before starting the wizard.
@@ -852,7 +872,7 @@ async def create_cmd(message: Message, state: FSMContext) -> None:
     await message.answer("Let's create a peer. Which node?", reply_markup=node_keyboard(nodes))
 
 
-@dp.message(Command("edit"))
+@private_router.message(Command("edit"))
 async def edit_cmd(message: Message, state: FSMContext) -> None:
     await state.clear()
     peers = await load_user_peers(message)
@@ -872,7 +892,7 @@ async def edit_cmd(message: Message, state: FSMContext) -> None:
     )
 
 
-@dp.message(Command("delete"))
+@private_router.message(Command("delete"))
 async def delete_cmd(message: Message, state: FSMContext) -> None:
     await state.clear()
     peers = await load_user_peers(message)
@@ -892,7 +912,7 @@ async def delete_cmd(message: Message, state: FSMContext) -> None:
 # Create wizard steps
 
 
-@dp.message(CreatePeer.node)
+@private_router.message(CreatePeer.node)
 async def create_node_step(message: Message, state: FSMContext) -> None:
     if await reject_if_command(message, "create"):
         return
@@ -910,7 +930,7 @@ async def create_node_step(message: Message, state: FSMContext) -> None:
     )
 
 
-@dp.message(CreatePeer.endpoint)
+@private_router.message(CreatePeer.endpoint)
 async def create_endpoint_step(message: Message, state: FSMContext) -> None:
     await handle_endpoint_step(
         message,
@@ -921,7 +941,7 @@ async def create_endpoint_step(message: Message, state: FSMContext) -> None:
     )
 
 
-@dp.message(CreatePeer.public_key)
+@private_router.message(CreatePeer.public_key)
 async def create_key_step(message: Message, state: FSMContext) -> None:
     if await reject_if_command(message, "create"):
         return
@@ -937,7 +957,7 @@ async def create_key_step(message: Message, state: FSMContext) -> None:
     await message.answer("Your DN42 IPv4 address, or send 'skip'.")
 
 
-@dp.message(CreatePeer.dn42_ipv4)
+@private_router.message(CreatePeer.dn42_ipv4)
 async def create_dn42_ipv4_step(message: Message, state: FSMContext) -> None:
     if await reject_if_command(message, "create"):
         return
@@ -946,7 +966,7 @@ async def create_dn42_ipv4_step(message: Message, state: FSMContext) -> None:
     await message.answer("Your DN42 IPv6 address, or send 'skip'.")
 
 
-@dp.message(CreatePeer.dn42_ipv6)
+@private_router.message(CreatePeer.dn42_ipv6)
 async def create_dn42_ipv6_step(message: Message, state: FSMContext) -> None:
     if await reject_if_command(message, "create"):
         return
@@ -955,7 +975,7 @@ async def create_dn42_ipv6_step(message: Message, state: FSMContext) -> None:
     await message.answer("Your link-local/BGP address (e.g. fe80::99), or send 'skip'.")
 
 
-@dp.message(CreatePeer.link_local)
+@private_router.message(CreatePeer.link_local)
 async def create_link_local_step(message: Message, state: FSMContext) -> None:
     if await reject_if_command(message, "create"):
         return
@@ -967,7 +987,7 @@ async def create_link_local_step(message: Message, state: FSMContext) -> None:
     )
 
 
-@dp.message(CreatePeer.mtu)
+@private_router.message(CreatePeer.mtu)
 async def create_mtu_step(message: Message, state: FSMContext) -> None:
     if await reject_if_command(message, "create"):
         return
@@ -984,7 +1004,7 @@ async def create_mtu_step(message: Message, state: FSMContext) -> None:
     )
 
 
-@dp.message(CreatePeer.bgp_extended)
+@private_router.message(CreatePeer.bgp_extended)
 async def create_bgp_extended_step(message: Message, state: FSMContext) -> None:
     if await reject_if_command(message, "create"):
         return
@@ -1018,7 +1038,7 @@ async def create_bgp_extended_step(message: Message, state: FSMContext) -> None:
     await message.answer(format_block(peer_preview_text(preview)), parse_mode="Markdown")
 
 
-@dp.message(CreatePeer.confirming)
+@private_router.message(CreatePeer.confirming)
 async def create_confirm_step(message: Message, state: FSMContext) -> None:
     if await reject_if_command(message, "create"):
         return
@@ -1041,7 +1061,7 @@ async def create_confirm_step(message: Message, state: FSMContext) -> None:
 # Edit wizard steps
 
 
-@dp.message(EditPeer.choosing)
+@private_router.message(EditPeer.choosing)
 async def edit_choose_step(message: Message, state: FSMContext) -> None:
     if await reject_if_command(message, "edit"):
         return
@@ -1059,7 +1079,7 @@ async def edit_choose_step(message: Message, state: FSMContext) -> None:
     )
 
 
-@dp.message(EditPeer.endpoint)
+@private_router.message(EditPeer.endpoint)
 async def edit_endpoint_step(message: Message, state: FSMContext) -> None:
     await handle_endpoint_step(
         message,
@@ -1070,7 +1090,7 @@ async def edit_endpoint_step(message: Message, state: FSMContext) -> None:
     )
 
 
-@dp.message(EditPeer.public_key)
+@private_router.message(EditPeer.public_key)
 async def edit_key_step(message: Message, state: FSMContext) -> None:
     if await reject_if_command(message, "edit"):
         return
@@ -1088,7 +1108,7 @@ async def edit_key_step(message: Message, state: FSMContext) -> None:
     )
 
 
-@dp.message(EditPeer.mtu)
+@private_router.message(EditPeer.mtu)
 async def edit_mtu_step(message: Message, state: FSMContext) -> None:
     if await reject_if_command(message, "edit"):
         return
@@ -1120,7 +1140,7 @@ async def edit_mtu_step(message: Message, state: FSMContext) -> None:
 # Delete wizard steps
 
 
-@dp.message(DeletePeer.choosing)
+@private_router.message(DeletePeer.choosing)
 async def delete_choose_step(message: Message, state: FSMContext) -> None:
     if await reject_if_command(message, "delete"):
         return
@@ -1139,7 +1159,7 @@ async def delete_choose_step(message: Message, state: FSMContext) -> None:
     )
 
 
-@dp.message(DeletePeer.confirming)
+@private_router.message(DeletePeer.confirming)
 async def delete_confirm_step(message: Message, state: FSMContext) -> None:
     if await reject_if_command(message, "delete"):
         return
@@ -1166,10 +1186,18 @@ async def main() -> None:
     if not settings.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
     bot = Bot(settings.telegram_bot_token)
+    # lg_router first so the looking-glass commands win in any chat; private_router carries the
+    # account/peer handlers behind its private-chat filter. In groups, anything the looking glass
+    # doesn't claim falls through unhandled. lg_router 優先,確保看板指令在任何聊天皆可用;
+    # private_router 的帳號／對等 handler 受私訊過濾器保護,群組中其餘訊息一律落空不處理。
+    dp.include_router(lg_router)
+    dp.include_router(private_router)
     try:
-        # Register the "/" command menu so Telegram clients advertise exactly this command set.
-        # 註冊「/」指令選單,使 Telegram 用戶端顯示的指令集與此完全一致。
+        # Advertise the full command set by default (private chats) and only the looking-glass
+        # subset in groups, matching what each chat type can actually run.
+        # 預設(私訊)顯示完整指令;群組僅顯示看板指令子集,與各聊天實際可用的指令一致。
         await bot.set_my_commands(BOT_COMMANDS)
+        await bot.set_my_commands(GROUP_BOT_COMMANDS, scope=BotCommandScopeAllGroupChats())
         await dp.start_polling(bot)
     finally:
         await backend.aclose()
